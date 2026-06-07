@@ -14,3 +14,6 @@ docs/research/corpus-recall-usability.md
 # Corpus-agent operational playbooks — dense with private-corpus examples; keep local.
 docs/corpus-authoring.md
 docs/corpus-agent-prompt.md
+
+# Rust build output
+/target

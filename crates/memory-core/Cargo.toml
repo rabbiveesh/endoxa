@@ -1,0 +1,12 @@
+[package]
+name = "memory-core"
+version = "0.1.0"
+edition = "2021"
+description = "Belief-memory core: belief model, loader, and frontier resolver (deterministic, no LLM)."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "recall"
+path = "src/bin/recall.rs"
