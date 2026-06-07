@@ -17,3 +17,6 @@ docs/corpus-agent-prompt.md
 
 # Rust build output
 /target
+
+# Local embedding cache
+.embeddings.json

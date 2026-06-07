@@ -10,7 +10,9 @@
 //! Store dir: $MEMORY_DIR (default ~/.local/share/agentic-memory/beliefs). Point it at a
 //! corpus's `beliefs/` to recall over the corpus during dev.
 
-use memory_core::Graph;
+mod embed;
+
+use memory_core::{Belief, Graph};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -129,9 +131,14 @@ fn tool_specs() -> Value {
 }
 
 fn recall(args: &Value, dir: &PathBuf) -> String {
-    let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-    if query.trim().is_empty() {
+    if query.is_empty() {
         return "(no query)".into();
     }
     let g = match Graph::load_dir(dir) {
@@ -142,18 +149,92 @@ fn recall(args: &Value, dir: &PathBuf) -> String {
         return "No memories yet.".into();
     }
     let defeated = g.defeated();
-    // Lexical stand-in for the semantic lens (embeddings come next). Frontier-filtered.
-    let mut hits: Vec<&memory_core::Belief> = g
-        .beliefs
-        .iter()
-        .filter(|b| !defeated.contains(&b.id))
-        .filter(|b| b.slug.to_lowercase().contains(&query) || b.claim.to_lowercase().contains(&query))
-        .collect();
-    hits.sort_by(|a, b| b.source_weight.partial_cmp(&a.source_weight).unwrap_or(std::cmp::Ordering::Equal));
-    if hits.is_empty() {
-        return format!("Nothing current recalled for \"{query}\".");
+    // Recall ranks only the CURRENT frontier — superseded/refuted beliefs are excluded.
+    let current: Vec<&Belief> = g.beliefs.iter().filter(|b| !defeated.contains(&b.id)).collect();
+
+    match semantic_recall(&g, &current, &query, dir, limit) {
+        Ok(text) => text,
+        Err(reason) => {
+            eprintln!("[memory-mcp] semantic recall unavailable ({reason}); using lexical");
+            lexical_recall(&current, &query, limit, &reason)
+        }
     }
-    let mut s = format!("Recalled {} current belief(s):\n", hits.len().min(limit));
+}
+
+/// Embedding-ranked recall: embed beliefs (cached) + the query via Ollama, cosine-rank the
+/// current frontier. Returns Err so the caller can fall back to lexical if Ollama is down.
+fn semantic_recall(
+    g: &Graph,
+    current: &[&Belief],
+    query: &str,
+    dir: &PathBuf,
+    limit: usize,
+) -> Result<String, String> {
+    let oll = embed::Ollama::from_env();
+    let mut cache = embed::load_cache(dir, &oll.model);
+
+    // embed any beliefs we don't have vectors for yet, in one batch, and persist
+    let need: Vec<&Belief> = g.beliefs.iter().filter(|b| !cache.contains_key(&b.id)).collect();
+    if !need.is_empty() {
+        let docs: Vec<String> = need
+            .iter()
+            .map(|b| format!("search_document: {}", b.claim))
+            .collect();
+        let vecs = oll.embed(&docs)?;
+        if vecs.len() != need.len() {
+            return Err(format!("embedding count mismatch ({} vs {})", vecs.len(), need.len()));
+        }
+        for (b, v) in need.iter().zip(vecs) {
+            cache.insert(b.id.clone(), v);
+        }
+        embed::save_cache(dir, &oll.model, &cache);
+    }
+
+    let qv = oll
+        .embed(&[format!("search_query: {query}")])?
+        .into_iter()
+        .next()
+        .ok_or("no query embedding")?;
+
+    let mut scored: Vec<(&Belief, f32)> = current
+        .iter()
+        .filter_map(|b| cache.get(&b.id).map(|v| (*b, memory_core::cosine(&qv, v))))
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    if scored.is_empty() {
+        return Ok(format!("Nothing current recalled for \"{query}\"."));
+    }
+    let dropped = g.beliefs.len() - current.len();
+    let mut s = format!(
+        "Recalled {} current belief(s) [semantic; {dropped} superseded/refuted dropped]:\n",
+        scored.len().min(limit)
+    );
+    for (b, score) in scored.iter().take(limit) {
+        s.push_str(&format!("\n• ({score:.2}) [{}] {}", b.slug, b.claim));
+    }
+    Ok(s)
+}
+
+/// Substring fallback when Ollama isn't reachable. Still frontier-filtered.
+fn lexical_recall(current: &[&Belief], query: &str, limit: usize, reason: &str) -> String {
+    let ql = query.to_lowercase();
+    let mut hits: Vec<&Belief> = current
+        .iter()
+        .copied()
+        .filter(|b| b.slug.to_lowercase().contains(&ql) || b.claim.to_lowercase().contains(&ql))
+        .collect();
+    hits.sort_by(|a, b| {
+        b.source_weight
+            .partial_cmp(&a.source_weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if hits.is_empty() {
+        return format!("Nothing current recalled for \"{query}\" (lexical; {reason}).");
+    }
+    let mut s = format!(
+        "Recalled {} current belief(s) [lexical fallback: {reason}]:\n",
+        hits.len().min(limit)
+    );
     for b in hits.iter().take(limit) {
         s.push_str(&format!("\n• [{}] {}", b.slug, b.claim));
     }

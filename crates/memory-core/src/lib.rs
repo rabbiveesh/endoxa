@@ -176,6 +176,23 @@ impl Belief {
     }
 }
 
+/// Cosine similarity between two equal-length vectors; 0.0 on degenerate input.
+pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let (mut dot, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+    }
+    if na == 0.0 || nb == 0.0 {
+        return 0.0;
+    }
+    dot / (na.sqrt() * nb.sqrt())
+}
+
 /// An in-memory belief graph for one corpus / world `main`.
 pub struct Graph {
     pub beliefs: Vec<Belief>,
