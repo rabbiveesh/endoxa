@@ -1,0 +1,16 @@
+# Belief corpus derived from PRIVATE third-party code (a private CRM).
+# Keep out of version control unless/until we have rights to it.
+# The generator (_seed.py) is also derived from reading that private repo, so it
+# goes too. Other corpora under corpus/ (the user's own repos) ARE committable.
+corpus/private-crm/
+
+# Python bytecode from the corpus generators
+__pycache__/
+*.pyc
+
+# Local research artifact — contains (private) example asks; keep local.
+docs/research/corpus-recall-usability.md
+
+# Corpus-agent operational playbooks — dense with private-corpus examples; keep local.
+docs/corpus-authoring.md
+docs/corpus-agent-prompt.md

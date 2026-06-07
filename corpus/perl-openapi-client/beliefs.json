@@ -1,0 +1,1128 @@
+{
+  "title": "OpenAPI::Client",
+  "blurb": "A Perl Mojolicious-based client that dynamically generates method-per-operationId HTTP clients from OpenAPI v2/v3 specifications, with input validation performed client-side before any request is sent.",
+  "subject_repo": "/home/veesh/personal/perl-openapi-client",
+  "sessions": {
+    "S1": [
+      "s1-initial-import",
+      "2017-08-18",
+      "Imported and converted Swagger2::Client to OpenAPI::Client 0.01"
+    ],
+    "S2": [
+      "s2-mojo-command",
+      "2017-08-19",
+      "Added mojo openapi CLI command, local app support"
+    ],
+    "S3": [
+      "s3-v3-api",
+      "2021-02-23",
+      "Rewrote to use new JSON::Validator schema API, added OpenAPIv3 support (1.00)"
+    ],
+    "S4": [
+      "s4-inheritance-fix",
+      "2022-06-03",
+      "Fixed class generation so subclassing works before new() is called (1.04)"
+    ],
+    "S5": [
+      "s5-collection-format",
+      "2022-08-17",
+      "Added collectionFormat support for query array params (1.05)"
+    ],
+    "S6": [
+      "s6-deepobject-fix",
+      "2026-06-04",
+      "Fixed deepObject and form/explode object parameters in OpenAPIv3 (1.09)"
+    ],
+    "R3-VOV": [
+      "r3-vov-session",
+      "2026-06-04",
+      "Mining the base_url doc revert chain (verdict-of-a-verdict)"
+    ],
+    "R3-CONFLICT": [
+      "r3-conflict-session",
+      "2026-06-04",
+      "Mining the body-param dual-path open conflict"
+    ],
+    "R3-SURVIVORS": [
+      "r3-survivors-session",
+      "2026-06-04",
+      "Mining early inferred-but-surviving design assumptions"
+    ]
+  },
+  "beliefs": [
+    {
+      "slug": "module-name-openapi-client",
+      "claim": "The CPAN distribution is named OpenAPI-Client and the main package is OpenAPI::Client.",
+      "body": "Makefile.PL sets NAME => 'OpenAPI::Client'. There is one primary source file at lib/OpenAPI/Client.pm.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Makefile.PL:7",
+        "lib/OpenAPI/Client.pm:1"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "license-artistic-2",
+      "claim": "The project is licensed under the Artistic License version 2.0.",
+      "body": "Makefile.PL specifies LICENSE => 'artistic_2'. The POD also confirms this.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.58,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Makefile.PL:5",
+        "lib/OpenAPI/Client.pm:469"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "ci-github-actions",
+      "claim": "CI runs via GitHub Actions on ubuntu-latest and windows-latest for Perl 5.16, 5.26, and 5.32.",
+      "body": "The workflow file at .github/workflows/ci.yml (added in commit 8b667ca) defines a matrix strategy over those OS/Perl combinations.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.68,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        ".github/workflows/ci.yml:1-5",
+        "git:Add github workflow for testing"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "entry-point-client-pm",
+      "claim": "The single entry-point source file for the library is lib/OpenAPI/Client.pm; there is also lib/Mojolicious/Command/openapi.pm for the CLI.",
+      "body": "find output confirms exactly two .pm files in lib/. The main package and a Mojolicious command.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.58,
+      "asserted": 0.7,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:1",
+        "lib/Mojolicious/Command/openapi.pm:1"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "version-current-108",
+      "claim": "The current released version in the codebase is 1.08; version 1.09 is in progress (not yet released).",
+      "body": "lib/OpenAPI/Client.pm sets $VERSION = '1.08' and Changes lists '1.09 Not Released' with the deepObject fix.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S6",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.72,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:12",
+        "Changes:1-8"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "dynamic-subclass-per-spec",
+      "claim": "Each distinct specification URL causes a unique dynamically-generated subclass of OpenAPI::Client to be created via eval and Mojo::Util::monkey_patch; these subclasses are cached so repeated new() calls with the same URL reuse them.",
+      "body": "_url_to_class() converts the spec URL into a valid package name (md5 if >110 chars). _generate_class() only runs if the class doesn't already isa the parent. Methods are monkey-patched onto the class, not re-generated each instantiation.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "validator-is-class-global"
+        ]
+      ],
+      "refs": [
+        "lib/OpenAPI/Client.pm:37-54",
+        "lib/OpenAPI/Client.pm:232-240"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "validator-is-class-global",
+      "claim": "The JSON::Validator::Schema object returned by validator() is per-class (shared among all instances constructed from the same spec), not per-instance.",
+      "body": "validator() is monkey-patched as a class method returning a closure over $schema. The POD explicitly states: 'This object global to the class, so changing it will affect all instances returned by new().'",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:74",
+        "lib/OpenAPI/Client.pm:460-465"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "validation-errors-return-400-tx",
+      "claim": "When client-side validation of request parameters fails, no HTTP request is sent; instead _build_tx() synthesizes a fake Mojo::Transaction::HTTP with a 400 status code and a JSON body containing the errors.",
+      "body": "_build_tx() builds a synthetic $tx with res->code(400), res->body encoded as JSON, and res->error set. The req->method is also set correctly on the synthetic tx (fixed in commit f43fe79). Callers can distinguish client-side errors from server-side by checking $tx->remote_address.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.93,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "client-side-error-detection"
+        ]
+      ],
+      "refs": [
+        "lib/OpenAPI/Client.pm:196-205",
+        "t/client.t:66-80",
+        "git:Fix setting correct request method on client errors"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "client-side-error-detection",
+      "claim": "Callers can distinguish whether an error came from the client-side validator or from the server by checking $tx->remote_address; it is set only for genuine HTTP responses.",
+      "body": "The test at t/client.t line 76 asserts ok $tx->remote_address for a server response, and line 80 asserts ok !$tx->remote_address for a client-side validation error. This pattern was codified in the 0.25 release.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.82,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "t/client.t:76-80",
+        "git:Add test to check if the error was on the client side or not"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "coerce-default-booleans-numbers-strings",
+      "claim": "The default coerce setting is 'booleans,numbers,strings', applied via JSON::Validator's coerce() at class-generation time.",
+      "body": "In _generate_class(), $jv->coerce($attrs->{coerce} // 'booleans,numbers,strings') is called before loading the schema. This means string '5' for an integer param is coerced silently — the test at t/client.t line 74 exercises this.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:61",
+        "t/client.t:74-75"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "bnb-returns-client-on-async",
+      "claim": "Generated non-blocking (callback) methods return $self (the client), not the transaction, so chaining is possible. Blocking calls return the $tx directly.",
+      "body": "_generate_method_bnb() closes over the route and returns $self when a callback is provided (lines 107-109), or $tx in the blocking case (line 107). Promise methods (_p suffix) always return a Mojo::Promise.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.87,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:93-111",
+        "t/client.t:84"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "call-croaks-no-such-operation",
+      "claim": "call() croaks with '[OpenAPI::Client] No such operationId' for unknown operation IDs; call_p() rejects the promise instead of croaking.",
+      "body": "call() uses Carp::croak on unknown ops. call_p() uses Mojo::Promise->reject. See lines 27-28 and 32-33.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:25-35",
+        "t/client.t:103-121"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "after-build-tx-event",
+      "claim": "The after_build_tx event fires after request construction and validation; the $tx at that point may be a synthetic error tx or a real one. The operationId is stored in $tx->req->env->{operationId}.",
+      "body": "_build_tx() always calls $self->emit(after_build_tx => $tx) at the end, whether or not validation succeeded. This is stated EXPERIMENTAL in the docs.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.83,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:211-212",
+        "lib/OpenAPI/Client.pm:361-374"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "scope-swagger-only",
+      "claim": "The project started as a Swagger 2.0-only client; OpenAPI v3 was not supported.",
+      "body": "The codebase was imported as Swagger2::Client on 2017-08-18 and immediately renamed. Initial base_url construction read /schemes, /host, /basePath — fields present only in OpenAPI v2 (Swagger).",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": [
+        "2017-08-18",
+        "2021-02-23"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Imported Swagger2::Client",
+        "git:Converted Swagger2::Client to OpenAPI::Client"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "scope-v2-only-api",
+      "claim": "The project supports OpenAPI v2 only; the JSON::Validator API is used directly without schema-type dispatch.",
+      "body": "Between 0.01 and 0.25, the code used JSON::Validator directly and manually traversed /paths. _generate_class() iterated paths with bundle() or manual traversal, not schema->routes.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.8,
+      "asserted": 0.82,
+      "valid_time": [
+        "2017-08-18",
+        "2021-02-22"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "scope-swagger-only"
+        ]
+      ],
+      "refs": [
+        "git:Imported Swagger2::Client",
+        "Changes:43-46"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "scope-v2-and-v3",
+      "claim": "The project supports both OpenAPI v2 and v3 via JSON::Validator::Schema::OpenAPIv2 and ::OpenAPIv3; the validator() method returns the appropriate subclass.",
+      "body": "Version 1.00 (2021-02-23) rewrote _generate_class() to use the new JSON::Validator schema API with $jv->schema()->schema, and added support for OpenAPIv3. The validator->routes API is the uniform interface for both versions.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": [
+        "2021-02-23",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "scope-v2-only-api"
+        ]
+      ],
+      "refs": [
+        "Changes:43-46",
+        "lib/OpenAPI/Client.pm:56-91",
+        "git:Updated to use new JSON::Validator schema API"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "base-url-old-v2-manual",
+      "claim": "Before 1.01, base_url was computed by manually reading /schemes, /host, /basePath from the validator — this broke silently for OpenAPI v3 specs which use 'servers' instead.",
+      "body": "The pre-1.01 base_url implementation accessed $schema->get('/schemes'), /host, /basePath. OpenAPI v3 puts the base URL under 'servers[0].url', so the old code produced a wrong default URL.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": [
+        "2021-02-23",
+        "2021-06-17"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Fix generating correct base URL for OpenAPIv3 schemas, closes #31",
+        "Changes:40-41"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "base-url-current-delegate",
+      "claim": "Since 1.01, base_url delegates to validator->base_url->clone if the validator supports it, falling back to defaults of http://localhost; this correctly handles both v2 and v3 specs.",
+      "body": "lib/OpenAPI/Client.pm lines 14-21 show the current base_url lazy builder. It checks ->can('base_url') to stay safe if the schema object doesn't support it.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": [
+        "2021-06-17",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "base-url-old-v2-manual"
+        ]
+      ],
+      "refs": [
+        "lib/OpenAPI/Client.pm:14-21",
+        "git:Fix generating correct base URL for OpenAPIv3 schemas, closes #31"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "subclass-hardwired-to-base",
+      "claim": "Before 1.04, dynamically-generated subclasses were hardwired to inherit from OpenAPI::Client itself (via a $BASE constant), making it impossible to subclass OpenAPI::Client and have the generated methods belong to the subclass.",
+      "body": "Pre-1.04 code used my $BASE = __PACKAGE__ and generated eval'd packages with 'use Mojo::Base $BASE'. When a user subclassed OpenAPI::Client (e.g. OpenAPI::Child), the generated class still pointed at the base, not the child.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": [
+        "2017-08-18",
+        "2022-06-03"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Allow inheritance and roles to be applied before new() #35, #37",
+        "Changes:27-29"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "subclass-fixed-parent-ref",
+      "claim": "Since 1.04, new() receives $parent (the calling class) and passes it to _generate_class(); generated packages inherit from $parent, enabling proper subclassing and Moo/Moose role application.",
+      "body": "Commit 810f532 renamed $class to $parent in new(), changed _generate_class() to accept $parent as first arg, and generates 'use Mojo::Base $parent'. _url_to_class() now returns \"$self\\::$package\" using the actual caller.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.93,
+      "valid_time": [
+        "2022-06-03",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "subclass-hardwired-to-base"
+        ]
+      ],
+      "refs": [
+        "lib/OpenAPI/Client.pm:38-54",
+        "lib/OpenAPI/Client.pm:232-240",
+        "git:Allow inheritance and roles to be applied before new() #35, #37"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "wrong-transactor-method-name",
+      "claim": "The documentation for the custom content generator example used add_generators() (plural) which does not exist on Mojo::UserAgent::Transactor.",
+      "body": "This was an inferred correct API call but was wrong: Mojo::UserAgent::Transactor exposes add_generator() (singular). The doc example silently showed the wrong method name.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "git:fix the method name called on the ua transactor"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "transactor-fix-verdict",
+      "claim": "The correct method name is add_generator() (singular); the earlier doc used add_generators() (plural) which was wrong and fixed in commit ce23aa2.",
+      "body": "Reneeb submitted PR fixing documentation: -  $client->ua->transactor->add_generators(xml => ...) was corrected to + add_generator(xml => ...). This was a pure documentation bug in the POD.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S2",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "wrong-transactor-method-name"
+        ],
+        [
+          "attacks",
+          "wrong-transactor-method-name"
+        ]
+      ],
+      "refs": [
+        "git:fix the method name called on the ua transactor",
+        "lib/Mojolicious/Command/openapi.pm:1"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "collection-format-type-check-bug",
+      "claim": "The initial collectionFormat implementation in 1.05 would die with 'Use of uninitialized value' when a param had no 'type' key, because it used $param->{type} eq 'array' without a defined check.",
+      "body": "Commit 6aeb6c8 (1.05) added _coerce_collection_format with: ($param->{type} eq 'array' ? 'csv' : ''). Commit e2434a3 (1.06) fixed this to: +(($param->{type} // '') eq 'array' ? 'csv' : '') adding the // '' guard.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": [
+        "2022-08-17",
+        "2022-09-11"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:217-225",
+        "git:Fix \"Use of uninitialized value\" warning, closes #39",
+        "git:Add support for \"collectionFormat\" for query params, closes #38"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "deepobject-name-undef-protocol",
+      "claim": "JSON::Validator passes an undefined $name to the query callback when it wants the entire params hash to reconstruct a deepObject or form/explode object parameter; failing to handle this caused dropped query params and an uninitialized-value warning.",
+      "body": "The fix in faede03 adds a guard: 'unless (defined $name)' inside the query callback. For deepObject, it filters keys matching /^{name}[/ ; for form/explode it filters keys present in $param->{schema}{properties}. Without this, $url->query->param(undef => ...) was called, silently dropping the params.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S6",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:177-191",
+        "t/style-explode.t:19-29",
+        "git:fix: support deepObject explode in openAPIv3 specs"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "autogenerated-operation-id",
+      "claim": "Since 1.08, when an OpenAPI path lacks an operationId, a method is autogenerated using the pattern {method}_{path} with path template params replaced by underscore and all non-word chars converted to underscore.",
+      "body": "Commit 7f2b011 added the fallback: join '_', method, path; then s|{...}|_|g; s|[/-]|_|g; s|__+|_|g. Previously such routes were silently skipped (next unless $route->{operation_id}).",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S6",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": [
+        "2026-06-04",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:80-88",
+        "git:Autogenerated operation_id (#46)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "wrong-missing-operation-skip",
+      "claim": "Routes without an operationId are silently skipped and no client method is generated for them, meaning you cannot call such endpoints.",
+      "body": "Before 1.08 the loop had 'next unless $route->{operation_id}' with no fallback. This was the intended behavior for a long time — operations without IDs were simply inaccessible.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": [
+        "2017-08-18",
+        "2026-06-04"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Autogenerated operation_id (#46)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "autogenerated-op-verdict",
+      "claim": "As of commit 7f2b011 (1.08/1.09), routes without operationId are no longer skipped; they get an autogenerated method name derived from the HTTP method and path, making all routes accessible.",
+      "body": "The PR #46 by Askar Timirgazin introduced the autogeneration. This supersedes the earlier behavior of silently skipping such routes.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S6",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "wrong-missing-operation-skip"
+        ],
+        [
+          "attacks",
+          "wrong-missing-operation-skip"
+        ]
+      ],
+      "refs": [
+        "git:Autogenerated operation_id (#46)",
+        "lib/OpenAPI/Client.pm:80-88"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "promise-error-with-code-resolves",
+      "claim": "In the _p (promise) methods, if validation fails and the synthetic error tx has an HTTP code (i.e., code 400), the promise RESOLVES with the tx rather than rejecting — only errors without an HTTP code cause rejection.",
+      "body": "_generate_method_p() lines 120-123: returns reject only if !$err->{code}. For client-side 400 errors the tx has both message and code=400, so the promise resolves. This is a subtle semantic: promise rejection is reserved for networking errors or unknown operationIds.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:119-124",
+        "t/client.t:92-97"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-no-response-validation",
+      "claim": "The client probably does not validate HTTP responses against the OpenAPI spec's response schemas — only request parameters are validated.",
+      "body": "Reading _build_tx() there is only a validate_request() call. No validate_response() call is visible anywhere. Response validation would be the server plugin's job (Mojolicious::Plugin::OpenAPI).",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 5,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.5,
+      "asserted": 0.6,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:127-194"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "prereqs-json-validator-mojolicious-plugin",
+      "claim": "Runtime dependencies are JSON::Validator >= 5.09 and Mojolicious::Plugin::OpenAPI >= 5.05; the plugin is required even for client-only use because it provides the validate_request() implementation on the schema object.",
+      "body": "Makefile.PL PREREQ_PM lists exactly these two. JSON::Validator provides the schema parsing and validate_request; the Plugin::OpenAPI dependency ensures the right version of the JSON::Validator schema extensions is available.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Makefile.PL:11"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "reducer-core-design",
+      "claim": "The fundamental design is: one class per spec URL (cached), methods generated by monkey-patching, all request validation done client-side before any HTTP call, with a symmetric blocking/non-blocking/promise API.",
+      "body": "Derived from [[dynamic-subclass-per-spec]], [[validation-errors-return-400-tx]], [[bnb-returns-client-on-async]]: these three aspects together define the core contract of the library and have been stable since 0.01.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-opus",
+        "model": "claude-opus-4-8"
+      },
+      "session": "S1",
+      "turn": 6,
+      "directness": "reduced",
+      "obs": 3,
+      "weight": 0.92,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "dynamic-subclass-per-spec"
+        ],
+        [
+          "derived_from",
+          "validation-errors-return-400-tx"
+        ],
+        [
+          "derived_from",
+          "bnb-returns-client-on-async"
+        ]
+      ],
+      "refs": [
+        "lib/OpenAPI/Client.pm:37-125"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "reducer-evolution-pattern",
+      "claim": "The project's evolution follows a consistent pattern: a feature is added for v2 only, then breaks or silently fails for v3, then a fix commit addresses the v3 case.",
+      "body": "Derived from [[base-url-old-v2-manual]] (v3 base URL broken until 1.01) and [[deepobject-name-undef-protocol]] (v3 deepObject broken until 1.09). Both are cases where the v2 path worked but the v3 path exposed missing handling.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-opus",
+        "model": "claude-opus-4-8"
+      },
+      "session": "S6",
+      "turn": 3,
+      "directness": "reduced",
+      "obs": 2,
+      "weight": 0.78,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "base-url-old-v2-manual"
+        ],
+        [
+          "derived_from",
+          "deepobject-name-undef-protocol"
+        ]
+      ],
+      "refs": [
+        "Changes:1-46"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "r3-baseurl-doc-original",
+      "claim": "The 'Custom server URL' POD originally showed only the in-place mutation style: $client->base_url->host('other.server.com') with no constructor-time string form.",
+      "body": "Before PR #33, the POD for the 'Custom server URL' section only documented `$client->base_url->host(...)` to mutate the URL after construction. There was no mention of passing `base_url =>` as a string or Mojo::URL to the constructor. This was the documented prior art that PR #33 aimed to correct.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-VOV",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": null,
+      "valid_time": [
+        "2021-08-28",
+        "2021-09-22"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:287",
+        "git:d1655f7"
+      ]
+    },
+    {
+      "slug": "r3-baseurl-doc-verdict1",
+      "claim": "PR #33 (commit 0d648f7) corrected the POD by replacing the mutation-only example with a constructor-first pattern: my $client = OpenAPI::Client->new(...); $client->base_url(Mojo::URL->new(...));",
+      "body": "Contributor Clive Holloway submitted PR #33 asserting that the prior documentation was misleading — it showed mutation of `base_url` fields in isolation without instantiation context. The fix added a `my $client = OpenAPI::Client->new(...)` line and used `$client->base_url(Mojo::URL->new(...))` to replace the URL. This is the first verdict: [[r3-baseurl-doc-original]] was wrong and the POD needed a constructor-first form. However, the fix introduced only a partial picture — it showed how to replace the whole URL via the accessor, but still omitted the string-form constructor argument that actually existed.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "R3-VOV",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.7,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-baseurl-doc-original"
+        ],
+        [
+          "attacks",
+          "r3-baseurl-doc-original"
+        ]
+      ],
+      "refs": [
+        "git:0d648f7",
+        "git:175b86a"
+      ]
+    },
+    {
+      "slug": "r3-baseurl-doc-verdict2",
+      "claim": "Commit 590d721 reverted PR #33's change outright, then commit 200c2d5 re-wrote the docs to show all three patterns (Mojo::URL constructor arg, string constructor arg, and post-construction mutation) and actually wired up string-to-Mojo::URL coercion in new().",
+      "body": "Maintainer Jan Henning Thorsen reverted the PR #33 doc fix (commit 590d721, 2021-09-25) and immediately replaced it with a more complete treatment (commit 200c2d5, 2021-09-26). This second verdict defeats [[r3-baseurl-doc-verdict1]]: the PR #33 fix was insufficient because (a) it didn't show the string constructor form, and (b) the string constructor form didn't actually work yet — `new()` didn't coerce plain strings to Mojo::URL objects. The re-write added `Scalar::Util::blessed` import, coercion logic in `new()`, three documented code examples, and a new `t/base-url.t` test covering all three patterns.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "R3-VOV",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.95,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-baseurl-doc-verdict1"
+        ],
+        [
+          "attacks",
+          "r3-baseurl-doc-verdict1"
+        ]
+      ],
+      "refs": [
+        "git:590d7218563d5908cc78d642b79a7ef12b829669",
+        "git:200c2d5",
+        "lib/OpenAPI/Client.pm:44-45",
+        "t/base-url.t:1"
+      ]
+    },
+    {
+      "slug": "r3-body-param-key-wins",
+      "claim": "When a body parameter name matches a key in $params, that value wins unconditionally and is promoted to $content{json}, even if the caller also passes an explicit json=> or body=> in %content.",
+      "body": "In `_build_tx`, the `body` sub (lib/OpenAPI/Client.pm lines 139-153) checks `if (exists $params->{$name})` first. If true, it does `$content{json} = $params->{$name}` before validation runs. Then at line 208, the tx is built with `defined $content{body} ? $content{body} : %content`. This means: if a caller passes both `{body => $data}` in `$params` AND `body => $raw_string` in `%content`, then `$content{json}` is set from `$params` at line 143, but `$content{body}` is NOT set — so the tx gets the structured JSON from `$params`. There is no conflict warning. But if the caller passes both `$params->{body}` AND `json => $override` in `%content`, the `$content{json}` will be silently overwritten at line 143. This is the implicit assumption: $params->{name} always takes precedence over %content.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:139-153",
+        "lib/OpenAPI/Client.pm:208"
+      ]
+    },
+    {
+      "slug": "r3-body-content-key-wins",
+      "claim": "When the body param name is NOT in $params, the %content hash generators take precedence — meaning body data can legitimately flow through %content (e.g., json =>, body =>, xml =>) bypassing the $params hash entirely.",
+      "body": "The else branch of the body sub (lib/OpenAPI/Client.pm lines 145-151) scans `('body', sort keys %{$self->ua->transactor->generators})` and reads from `%content` to populate `$params->{$name}`. This means %content is a fully valid second channel for body data. These two paths ([[r3-body-param-key-wins]] and this belief) are in real tension: the API accepts body data through both `$params->{bodyParamName}` and `%content` key, but they interact silently — if a caller accidentally provides both, `$params` wins and `%content` is silently ignored for that body param. There is no FIXME but also no documentation of the precedence rule.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "attacks",
+          "r3-body-param-key-wins"
+        ]
+      ],
+      "refs": [
+        "lib/OpenAPI/Client.pm:145-151",
+        "lib/OpenAPI/Client.pm:208",
+        "t/body-validation.t:27-30",
+        "t/json-request.t:18-22"
+      ]
+    },
+    {
+      "slug": "r3-ua-lazy-singleton",
+      "claim": "The `ua` attribute has been a lazy singleton (one Mojo::UserAgent per client instance, created on first access) since the initial 2017-08-18 conversion commit.",
+      "body": "At write time (2017-08-18, commit 275bf6b), the `has ua => sub { Mojo::UserAgent->new }` pattern was inferred to be intentional: one UA per client instance, constructed lazily. This was structurally obvious — a per-instance lazy builder with no shared state. It has survived 130 commits including the inheritance refactor (810f532, 2022-06-03), the `ua` injection feature (138fc67, 2026-06-04 via `$client->ua` argument in `new()`), and the `collectionFormat` work without change to the fundamental pattern. Checkable: the current code still has `has ua => sub { Mojo::UserAgent->new }` at lib/OpenAPI/Client.pm line 23.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": [
+        "2017-08-18",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:23",
+        "git:275bf6b",
+        "git:810f532"
+      ]
+    },
+    {
+      "slug": "r3-url-to-class-md5-threshold",
+      "claim": "The URL→class-name conversion uses an MD5 hash only for spec URLs longer than 110 characters; shorter URLs are sanitized directly to Perl identifier form.",
+      "body": "At write time (2017-08-18, commit 275bf6b), the `_url_to_class` sub used `length $package > 110` with a comment 'a bit random'. This heuristic was inferred as deliberate pragmatism — Perl package names have no formal length limit but very long names cause practical problems (file system paths, stack traces). The 110 threshold was already present in the Swagger2::Client ancestor (where the original was 40, also annotated 'a bit random'). The 275bf6b conversion bumped it to 110, suggesting the author consciously revisited it. It has survived all 130 commits unchanged. Checkable: lib/OpenAPI/Client.pm line 237 `if length $package > 110`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.55,
+      "asserted": 0.6,
+      "valid_time": [
+        "2017-08-18",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:237",
+        "git:275bf6b"
+      ]
+    },
+    {
+      "slug": "r3-transactor-name-set-once",
+      "claim": "The Mojo::UserAgent transactor name is set to 'Mojo-OpenAPI (Perl)' exactly once in new(), and only when the caller did not inject a pre-built ua instance.",
+      "body": "At write time (2017-08-18, commit 275bf6b), `$self->ua->transactor->name('Mojo-OpenAPI (Perl)')` was called unconditionally in `new()`. The guard `unless $self->{ua}` was added later to support passing a pre-built UA. At write time this was structurally obvious: setting a User-Agent header string is a one-time initialization concern. The pattern has survived with only one change — the `unless $self->{ua}` guard added for ua injection. Checkable: lib/OpenAPI/Client.pm line 46 `unless $self->{ua}`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": [
+        "2017-08-18",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:46",
+        "git:275bf6b",
+        "git:138fc67"
+      ]
+    },
+    {
+      "slug": "r3-generated-class-cached",
+      "claim": "Generated subclasses are cached: calling new() with the same spec URL twice reuses the already-generated class rather than regenerating it.",
+      "body": "At write time (2017-08-18, commit 275bf6b), the `unless $class->isa($parent)` guard (originally `unless $class->isa($BASE)`) makes the caching design structurally explicit — the class is only generated the first time a given URL is seen; subsequent calls find the class already exists in Perl's symbol table and skip `_generate_class`. This was inferable as a performance/correctness decision: re-patching methods onto an existing class could cause duplicate method registration. The guard has survived the inheritance refactor (810f532) which changed `$BASE` to `$parent` without altering the caching semantics. Checkable: lib/OpenAPI/Client.pm line 42 `unless $class->isa($parent)`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": 0.7,
+      "valid_time": [
+        "2017-08-18",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/OpenAPI/Client.pm:42",
+        "git:275bf6b",
+        "git:810f532"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1528 @@
+{
+  "title": "Helix Editor",
+  "blurb": "A Kakoune/Neovim-inspired modal text editor written in Rust, featuring multiple selections, built-in LSP support, and tree-sitter-powered syntax highlighting.",
+  "subject_repo": "/home/veesh/personal/helix",
+  "sessions": {
+    "S1": [
+      "s-early-arch-2020",
+      "2020-05-20",
+      "Initial repo import; ChangeSet / Rope design"
+    ],
+    "S2": [
+      "s-lsp-compositor-2020",
+      "2020-12-07",
+      "LSP integration & Compositor layer added"
+    ],
+    "S3": [
+      "s-event-hook-2023",
+      "2023-12-01",
+      "Async hook/event system introduced"
+    ],
+    "S4": [
+      "s-lsp-types-refactor-2024",
+      "2024-07-27",
+      "helix-lsp-types crate extracted; stable-sort edits"
+    ],
+    "S5": [
+      "s-jumplist-fix-2024",
+      "2024-06-18",
+      "Jumplist backward-at-capacity bug fixed"
+    ],
+    "S6": [
+      "s-rope-fix-2024",
+      "2024-09-21",
+      "Rope.starts_with off-by-one fixed"
+    ],
+    "R3-VERDICT": [
+      "r3-verdict-session",
+      "2026-06-04",
+      "Verdict-of-a-verdict: backspace-out-of-prompt add→revert chain"
+    ],
+    "R3-CONFLICT": [
+      "r3-conflict-session",
+      "2026-06-04",
+      "Open un-adjudicated conflicts in helix codebase"
+    ],
+    "R3-SURVIVORS": [
+      "r3-survivors-session",
+      "2026-06-04",
+      "Inferred early design decisions that survived the full commit history"
+    ],
+    "R3C1": [
+      "r3-corrob-cargo-2024",
+      "2024-08-01",
+      "noticed the workspace layout while reading Cargo.toml"
+    ],
+    "R3C2": [
+      "r3-corrob-dirs-2024",
+      "2024-08-02",
+      "independently re-derived the crate split from the directory layout"
+    ]
+  },
+  "beliefs": [
+    {
+      "slug": "binary-name-hx",
+      "claim": "The compiled binary is named `hx`, not `helix`.",
+      "body": "The CLI help text in main.rs prints `hx [FLAGS] [files]...` and the binary crate is `helix-term` with default-member `helix-term`. Running `cargo build` produces a binary named `hx`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-term/src/main.rs:50"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "license-mpl2",
+      "claim": "Helix is licensed under the Mozilla Public License 2.0, not MIT or Apache-2.",
+      "body": "LICENSE begins with 'Mozilla Public License Version 2.0'. The workspace Cargo.toml also declares `license = \"MPL-2.0\"`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "LICENSE:1",
+        "Cargo.toml:43"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "ci-github-actions",
+      "claim": "CI runs on GitHub Actions; workflows are defined in .github/workflows/.",
+      "body": "The .github/workflows/ directory contains build.yml, release.yml, gh-pages.yml, cachix.yml, and a languages.toml validation workflow. The README badge links to the build.yml action.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.58,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        ".github/workflows/build.yml",
+        "README.md:11"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "config-dir-location",
+      "claim": "User configuration is loaded from a platform-specific config directory via `helix_loader::initialize_config_file`; there is no hard-coded path like `~/.config/helix` in main.rs.",
+      "body": "main.rs calls `helix_loader::initialize_config_file(args.config_file.clone())` and `helix_loader::initialize_log_file`. The actual path resolution is delegated to helix-loader, which uses OS conventions.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.7,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-term/src/main.rs:81-82"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "default-indent-tabs",
+      "claim": "New documents default to tab-based indentation; the constant DEFAULT_INDENT is IndentStyle::Tabs.",
+      "body": "helix-view/src/document.rs declares `const DEFAULT_INDENT: IndentStyle = IndentStyle::Tabs;` at line 50, and this is used in Document::open() when no language config specifies otherwise.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.7,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-view/src/document.rs:50"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "calver-versioning",
+      "claim": "The project uses CalVer (YY.MM.0) since at least version 23.03. The workspace version at HEAD is 24.7.0.",
+      "body": "Cargo.toml `[workspace.package]` declares `version = \"24.7.0\"`. Git log shows commits like 'Bump the version to 23.05' (2023-04-05) and 'Add changelog notes for 24.07' (2024-07-14), confirming the CalVer convention.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.63,
+      "asserted": 0.72,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Cargo.toml:37",
+        "git:Bump the version to 23.05",
+        "git:Add changelog notes for 24.07 (#10731)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "scope-initial-single-file",
+      "claim": "At inception (2020-05-20) the project was a single-crate prototype with a CodeMirror-inspired ChangeSet core and crossterm-based terminal I/O.",
+      "body": "The initial commit (240e5f4e3) is a single Rust crate. The second commit (44ff4d3c1) reads 'Implement a new core based on CodeMirror', and an early commit (6905ff03c) reads 'Start swapping from termwiz to crossterm + async'. LSP and helix-view did not yet exist.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": [
+        "2020-05-20",
+        "2020-10-17"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Initial import.",
+        "git:Implement a new core based on CodeMirror.",
+        "git:Start swapping from termwiz to crossterm + async."
+      ],
+      "scope": true
+    },
+    {
+      "slug": "scope-lsp-compositor-added",
+      "claim": "By December 2020 the project had gained a Compositor abstraction for layered UI, basic LSP lifecycle support, and the Document/Editor split.",
+      "body": "Commits b2b3083a6 (2020-10-19) 'Support multiple open views', b7a3e525e (2020-12-03) 'Merge pull request #5 from helix-editor/lsp', and 83f2c2411 (2020-12-06) 'wip: Compositor' mark these additions. The compositor commit (b12a6dc83) landed 2020-12-13.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": [
+        "2020-12-07",
+        "2023-11-30"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "scope-initial-single-file"
+        ]
+      ],
+      "refs": [
+        "git:Merge pull request #5 from helix-editor/lsp",
+        "git:wip: Compositor"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "scope-async-hook-system",
+      "claim": "Since December 2023 the project has a formal async hook/event system in the helix-event crate, replacing ad-hoc polling patterns for LSP completion, signature help, etc.",
+      "body": "Commit 13ed4f6c4 (2023-12-01) 'Add hook/event system' introduced helix-event/src/hook.rs, registry.rs, runtime.rs, debounce.rs and a 1000+ line diff touching helix-term and helix-view. The module docs in helix-event/src/lib.rs explain synchronous hooks and AsyncHook types.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.92,
+      "valid_time": [
+        "2023-12-01",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "scope-lsp-compositor-added"
+        ]
+      ],
+      "refs": [
+        "git:Add hook/event system",
+        "helix-event/src/lib.rs:1-33"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "changeset-ops",
+      "claim": "A ChangeSet is a sequence of three operations: Retain(n), Delete(n), and Insert(Tendril). It tracks both the required input length and the resulting output length.",
+      "body": "helix-core/src/transaction.rs defines `pub enum Operation { Retain(usize), Delete(usize), Insert(Tendril) }` and `ChangeSet { changes: Vec<Operation>, len: usize, len_after: usize }`. The `compose` method asserts `self.len_after == other.len`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.95,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-core/src/transaction.rs:13-20",
+        "helix-core/src/transaction.rs:62-68",
+        "helix-core/src/transaction.rs:153-154"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "transaction-wraps-changeset",
+      "claim": "A Transaction combines a ChangeSet with an optional explicit Selection override. Applying a Transaction only changes the Rope content; it does NOT automatically update the Selection.",
+      "body": "Transaction::apply() at line 546 only calls `self.changes.apply(doc)` on the Rope. The selection field is `Option<Selection>` and is accessed separately via `transaction.selection()`. Callers (helix-view document) must map the selection through changes themselves.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "changeset-ops"
+        ]
+      ],
+      "refs": [
+        "helix-core/src/transaction.rs:521-553"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "selection-gap-indexing",
+      "claim": "Range anchor and head positions use gap (between-char) indexing: index 0 is before the first char, index N is after the last char. Ranges are inclusive-left, exclusive-right.",
+      "body": "The doc comment on Range in selection.rs explicitly states 'gap indexing, meaning that their indices represent the gaps *between* chars'. Range::from() returns min(anchor,head) and Range::to() returns max; the range is inclusive on the left and exclusive on the right.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.95,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-core/src/selection.rs:26-47",
+        "helix-core/src/selection.rs:86-95"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "selection-never-empty",
+      "claim": "A Selection always contains at least one Range (the primary). The SmallVec is allocated inline for the common single-selection case.",
+      "body": "selection.rs line 405: 'invariant: A selection can never be empty (always contains at least primary range)'. The internal storage is `SmallVec<[Range; 1]>`, so single-selection mode is stack-allocated.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "selection-gap-indexing"
+        ]
+      ],
+      "refs": [
+        "helix-core/src/selection.rs:405-409"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "per-view-selection",
+      "claim": "Each Document stores a separate Selection per ViewId, not one global selection. A document open in two splits can have independent cursor positions.",
+      "body": "Document has field `selections: HashMap<ViewId, Selection>` (document.rs:136) and exposes `fn selection(&self, view_id: ViewId) -> &Selection`. The `set_selection` function inserts/updates the entry for that view ID.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.93,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-view/src/document.rs:133-137",
+        "helix-view/src/document.rs:1217-1220",
+        "helix-view/src/document.rs:1828-1834"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "editor-documents-btreemap",
+      "claim": "The Editor stores all open Documents in a BTreeMap keyed by DocumentId, and the layout tree in a separate Tree struct.",
+      "body": "helix-view/src/editor.rs defines `pub struct Editor` with `pub tree: Tree` and `pub documents: BTreeMap<DocumentId, Document>`. The Tree struct manages window layout; documents and views are decoupled.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "per-view-selection"
+        ]
+      ],
+      "refs": [
+        "helix-view/src/editor.rs:1013-1018"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "syntax-uses-hop-slotmap-layers",
+      "claim": "The Syntax struct stores injection layers in a HopSlotMap keyed by LayerId. The root layer is always present; child injection layers are added for embedded languages.",
+      "body": "helix-core/src/syntax.rs: `pub struct Syntax { layers: HopSlotMap<LayerId, LanguageLayer>, root: LayerId, loader: Arc<ArcSwap<Loader>> }`. Each LanguageLayer holds a tree-sitter Tree, depth, parent LayerId, and a set of byte ranges.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-core/src/syntax.rs:1075-1079",
+        "helix-core/src/syntax.rs:1542-1551"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "ts-parser-thread-local",
+      "claim": "The tree-sitter Parser is stored as a thread-local RefCell (PARSER), not in any shared state. This avoids locks but means the parser is single-use per thread.",
+      "body": "syntax.rs: `thread_local! { pub static PARSER: RefCell<TsParser> = RefCell::new(TsParser { parser: Parser::new(), cursors: Vec::new() }) }`. Both `Syntax::update` and `highlight_iter` borrow this thread-local parser.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "syntax-uses-hop-slotmap-layers"
+        ]
+      ],
+      "refs": [
+        "helix-core/src/syntax.rs:1061-1072"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "ts-parse-timeout-500ms",
+      "claim": "Tree-sitter parses are capped at 500ms (500,000 microseconds). If the timeout fires, the parse aborts and the syntax tree is left in a partial state.",
+      "body": "In Syntax::update: `ts_parser.parser.set_timeout_micros(1000 * 500); // half a second is pretty generours`. The comment even has a typo ('generours'). A failed parse logs an error and returns None.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "ts-parser-thread-local"
+        ]
+      ],
+      "refs": [
+        "helix-core/src/syntax.rs:1251"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "ts-match-limit",
+      "claim": "Query cursors are limited to 256 matches (`TREE_SITTER_MATCH_LIMIT = 256`) to prevent catastrophic backtracking in complex queries on large files.",
+      "body": "syntax.rs line 657: `const TREE_SITTER_MATCH_LIMIT: u32 = 256;`. The comment above explains this guards against performance issues on medium-to-large files.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "ts-parse-timeout-500ms"
+        ]
+      ],
+      "refs": [
+        "helix-core/src/syntax.rs:640-657"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "rope-text-storage",
+      "claim": "Text content is stored as a ropey::Rope with SIMD acceleration enabled. helix-core re-exports it directly: `pub use ropey::{Rope, RopeBuilder, RopeSlice}`.",
+      "body": "helix-core/Cargo.toml: `ropey = { version = \"1.6.1\", default-features = false, features = [\"simd\"] }`. helix-core/src/lib.rs line 44: `pub use ropey::{self, str_utils, Rope, RopeBuilder, RopeSlice}`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.93,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-core/Cargo.toml:22",
+        "helix-core/src/lib.rs:44"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "tendril-is-smartstring",
+      "claim": "The Tendril type used in ChangeSet Inserts is SmartString<LazyCompact>, not the tendril crate. This provides inline small-string optimization.",
+      "body": "lib.rs: `// pub use tendril::StrTendril as Tendril;` is commented out; active definition is `pub type Tendril = SmartString<smartstring::LazyCompact>;`. The commented-out line documents the migration away from tendril.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "changeset-ops"
+        ]
+      ],
+      "refs": [
+        "helix-core/src/lib.rs:46-49"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "helix-stdx-created-jan-2024",
+      "claim": "The helix-stdx crate (stdlib extensions for rope, path, and env utilities) was carved out from helix-core in January 2024.",
+      "body": "Git log shows commit 1f916e65c (2024-01-16) 'Create helix-stdx crate for stdlib extensions'. Prior to this, the utilities lived inside helix-core or helix-loader.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "git:Create helix-stdx crate for stdlib extensions"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "helix-lsp-types-extracted",
+      "claim": "Since July 2024 helix-lsp uses its own helix-lsp-types crate instead of the third-party lsp-types crate, giving the project control over LSP type definitions.",
+      "body": "Commit e21e4eb82 (2024-07-27) 'Replace lsp-types in helix-lsp with helix-lsp-types'. The parent PR (3fcf168c3, 2024-07-31) merged the helix-lsp-types crate. helix-lsp/src/lib.rs now has `pub use helix_lsp_types as lsp;`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.92,
+      "valid_time": [
+        "2024-07-27",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Replace lsp-types in helix-lsp with helix-lsp-types",
+        "helix-lsp/src/lib.rs:11"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "jumplist-capacity-30",
+      "claim": "Each View's JumpList has a fixed capacity of 30 entries. When full and a new jump is pushed, the oldest entry is silently discarded.",
+      "body": "helix-view/src/view.rs: `const JUMP_LIST_CAPACITY: usize = 30;`. The `push_impl` method: `while self.jumps.len() >= JUMP_LIST_CAPACITY { self.jumps.pop_front(); ... }`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-view/src/view.rs:26-57"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "jumplist-backward-bug-old",
+      "claim": "Before June 2024, jumping backward through the jumplist when the list was at capacity would produce incorrect positions because `self.current` was not adjusted when entries were dropped from the front.",
+      "body": "Commit 668f1239a (2024-06-18) 'Fix jump_backwards behaviour when jumplist is at capacity' rewrote `push_impl` to return `num_removed_from_front` and used it to `saturating_sub` from `self.current` in the backward method. The old `push` just discarded front elements without updating the cursor index.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": [
+        "2020-10-07",
+        "2024-06-18"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Fix jump_backwards behaviour when jumplist is at capacity (#10968)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "jumplist-backward-bug-fixed",
+      "claim": "The jumplist backward-at-capacity bug was confirmed by a code review fix: `push_impl` now returns the number of entries removed from the front, and `backward` applies `saturating_sub` to keep `self.current` aligned.",
+      "body": "Commit 668f1239a adds `fn push_impl(&mut self, jump: Jump) -> usize`, counting `num_removed_from_front`, and the `backward` method calls `current = current.saturating_sub(num_removed)`. This is the authoritative fix.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S5",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": null,
+      "valid_time": [
+        "2024-06-18",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "adjudicates",
+          "jumplist-backward-bug-old"
+        ],
+        [
+          "attacks",
+          "jumplist-backward-bug-old"
+        ],
+        [
+          "supersedes",
+          "jumplist-backward-bug-old"
+        ]
+      ],
+      "refs": [
+        "helix-view/src/view.rs:43-80",
+        "git:Fix jump_backwards behaviour when jumplist is at capacity (#10968)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "rope-starts-with-wrong-slice",
+      "claim": "Before September 2024, `RopeSliceExt::starts_with` was silently wrong: it sliced `len - text.len()` bytes from the front instead of the first `text.len()` bytes, so it was actually testing the wrong region of the rope.",
+      "body": "Commit 5717aa8e3 (2024-09-21) 'Fix Rope.starts_with' changed `self.get_byte_slice(..len - text.len())` to `self.get_byte_slice(..text.len())`. The first form computes the wrong window — it drops the prefix rather than taking it.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S6",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": [
+        null,
+        "2024-09-21"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Fix Rope.starts_with. (#11739)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "rope-starts-with-fixed",
+      "claim": "The correct implementation of `RopeSliceExt::starts_with` slices the first `text.len()` bytes (not `len - text.len()`) and compares to the input `text`.",
+      "body": "helix-stdx/src/rope.rs after fix: `self.get_byte_slice(..text.len()).map_or(false, |start| start == text)`. The maintainer added unit tests for both `starts_with` and `ends_with` in the same commit.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S6",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": null,
+      "valid_time": [
+        "2024-09-21",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "adjudicates",
+          "rope-starts-with-wrong-slice"
+        ],
+        [
+          "attacks",
+          "rope-starts-with-wrong-slice"
+        ],
+        [
+          "supersedes",
+          "rope-starts-with-wrong-slice"
+        ]
+      ],
+      "refs": [
+        "helix-stdx/src/rope.rs:51-55",
+        "git:Fix Rope.starts_with. (#11739)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "lsp-edits-sorted-stable",
+      "claim": "LSP text edits are stable-sorted by start position before being applied, because some servers (notably Omnisharp) send them in reverse order and stable sort preserves equal-position edit ordering.",
+      "body": "The original sort from commit 3d91c99c3 (2022-06-02) used `sort_unstable_by_key`. Commit 8e041c99d (2024-07-28) 'stable sort lsp edits' changed it to `sort_by_key` in generate_transaction_from_edits. The reason cited is that equal-position edits must retain their original server-specified order.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.92,
+      "valid_time": [
+        "2024-07-28",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "helix-lsp/src/lib.rs:503-506",
+        "git:stable sort lsp edits (#11357)",
+        "git:fix: lsp: Sort edits by start range, Omnisharp sends them in reverse"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "find-completion-range-off-by-one-old",
+      "claim": "Before July 2024, `find_completion_range` in helix-lsp overcounted the end position in replace mode by one: it did `.skip(1)` before `.take_while(char_is_word)` and then added +1, producing a range end that was one character too far.",
+      "body": "The bug was present in the code before commit 7c5e5f4e4 (2024-07-24). The old logic: `end += text.chars_at(cursor).skip(1).take_while(...).count() + 1;` - skipping the first char under cursor then adding 1 back double-counted.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": [
+        null,
+        "2024-07-24"
+      ],
+      "edges": [],
+      "refs": [
+        "git:fix(lsp): `find_completion_range` off-by-one (#11266)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "find-completion-range-fixed",
+      "claim": "The correct `find_completion_range` in replace mode extends `end` by counting word chars starting from the cursor position without any skip or +1 adjustment.",
+      "body": "Commit 7c5e5f4e4 (2024-07-24) simplified the replace-mode branch to `end += text.chars_at(cursor).take_while(|ch| chars::char_is_word(*ch)).count();` — no skip, no +1. This is the current implementation.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S4",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": null,
+      "valid_time": [
+        "2024-07-24",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "adjudicates",
+          "find-completion-range-off-by-one-old"
+        ],
+        [
+          "attacks",
+          "find-completion-range-off-by-one-old"
+        ],
+        [
+          "supersedes",
+          "find-completion-range-off-by-one-old"
+        ]
+      ],
+      "refs": [
+        "helix-lsp/src/lib.rs:276-291",
+        "git:fix(lsp): `find_completion_range` off-by-one (#11266)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "compositor-component-trait",
+      "claim": "The Compositor is a layered UI system where each UI element implements the Component trait (handle_event, render, cursor, required_size). EventResult can carry a deferred Callback closure.",
+      "body": "helix-term/src/compositor.rs: `pub trait Component: Any + AnyComponent` with methods `handle_event`, `render`, `cursor`, `required_size`. `EventResult` is `Ignored(Option<Callback>) | Consumed(Option<Callback>)`. `Callback = Box<dyn FnOnce(&mut Compositor, &mut Context)>`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-term/src/compositor.rs:9-67"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "event-system-sync-hooks",
+      "claim": "Synchronous hooks in helix-event run immediately on the calling thread and can modify editor state in-place. They cannot store their own state. For stateful or async needs, AsyncHook is required.",
+      "body": "helix-event/src/lib.rs module docs: 'Hooks run synchronously which can be advantageous since they can modify the current editor state right away... However, they can not contain their own state without locking since they only receive immutable references. For handlers that want to track state... an AsyncHook is preferable.'",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "scope-async-hook-system"
+        ]
+      ],
+      "refs": [
+        "helix-event/src/lib.rs:11-18"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "nucleo-fuzzy-picker",
+      "claim": "The file/symbol picker uses the nucleo crate (v0.5.0) for fuzzy matching, not a home-grown algorithm or the older skim library.",
+      "body": "Cargo.toml workspace.dependencies: `nucleo = \"0.5.0\"`. helix-term/src/ui/picker.rs imports `use nucleo::{Config, Nucleo}` and constructs `Nucleo::new(...)`. The `Injector<T>` type is used to stream items into the matcher asynchronously.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Cargo.toml:42",
+        "helix-term/src/ui/picker.rs:18-19"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "lsp-default-offset-utf16",
+      "claim": "The default LSP offset encoding is UTF-16, as mandated by the LSP specification base. The OffsetEncoding enum defaults to Utf16.",
+      "body": "helix-lsp/src/lib.rs: `pub enum OffsetEncoding { Utf8, Utf32, #[default] Utf16 }`. The `#[default]` attribute on the Utf16 variant makes this the fallback when a server does not specify position encoding capability.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-lsp/src/lib.rs:56-65"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "language-config-deny-unknown",
+      "claim": "LanguageConfiguration structs are deserialized with `deny_unknown_fields`, so adding an unrecognized key to a `[[language]]` block in languages.toml causes a hard config parse error.",
+      "body": "syntax.rs line 93: `#[serde(rename_all = \"kebab-case\", deny_unknown_fields)]` on LanguageConfiguration. This means typos in user-provided language configs fail loudly rather than silently.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-core/src/syntax.rs:93-94"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "history-tree-not-linear",
+      "claim": "Undo history is a branching tree of Revisions, not a flat stack. Each Revision has a parent index and a `last_child` pointer, enabling `:earlier`/`:later` time-travel navigation.",
+      "body": "helix-core/src/history.rs: History stores `revisions: Vec<Revision>` where each Revision has `parent: usize` and `last_child: Option<NonZeroUsize>`. The comment explains ':earlier and :later can be used to jump to the closest revision to a moment in time'.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-core/src/history.rs:1-60"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "assoc-word-variants",
+      "claim": "The Assoc enum (used to map cursor positions through ChangeSet edits) has special AfterWord and BeforeWord variants that snap to word boundaries during insertions, in addition to the plain Before/After/Sticky variants.",
+      "body": "transaction.rs defines `Assoc { Before, After, AfterWord, BeforeWord, BeforeSticky, AfterSticky }`. `AfterWord` does `s.chars().take_while(|&c| char_is_word(c)).count()`, landing after the initial word run of the inserted text.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.82,
+      "asserted": 0.87,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "changeset-ops"
+        ]
+      ],
+      "refs": [
+        "helix-core/src/transaction.rs:22-60"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-ts-injection-costly",
+      "claim": "Injection layer computation is likely the dominant cost during incremental re-parse of large files with many embedded languages (e.g. HTML with embedded JS and CSS).",
+      "body": "The Syntax::update loop processes layers iteratively, and injection queries run fresh per modified layer. With deeply nested injections the HopSlotMap can grow large. This is a hunch based on reading the layer update code — no profiling data available.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 6,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.5,
+      "asserted": 0.6,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "syntax-uses-hop-slotmap-layers"
+        ]
+      ],
+      "refs": [
+        "helix-core/src/syntax.rs:1290-1310"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-mode-tristate",
+      "claim": "The Mode enum in helix-view has exactly three variants (Normal, Select, Insert); there is no separate Command or Pending mode unlike some other modal editors.",
+      "body": "helix-view/src/document.rs: `pub enum Mode { Normal = 0, Select = 1, Insert = 2 }` with explicit Display and FromStr. Helix uses keymap layers and the Compositor for command entry rather than a dedicated Command mode.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.5,
+      "asserted": 0.62,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-view/src/document.rs:57-70"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "reduced-core-data-model",
+      "claim": "The helix-core data model is: documents are Ropes; edits are ChangeSets composed of Retain/Delete/Insert operations; the Selection is a non-empty list of (anchor,head) Ranges with gap indexing; and all three are unified into Transactions for atomic application.",
+      "body": "This consensus summarizes [[changeset-ops]], [[rope-text-storage]], [[selection-gap-indexing]], and [[transaction-wraps-changeset]]. The model closely mirrors CodeMirror 6's design (per commit 44ff4d3c1) and was present from the earliest commits.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-sonnet",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 5,
+      "directness": "reduced",
+      "obs": 4,
+      "weight": 0.92,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "changeset-ops"
+        ],
+        [
+          "derived_from",
+          "rope-text-storage"
+        ],
+        [
+          "derived_from",
+          "selection-gap-indexing"
+        ],
+        [
+          "derived_from",
+          "transaction-wraps-changeset"
+        ]
+      ],
+      "refs": [],
+      "scope": false
+    },
+    {
+      "slug": "reduced-lsp-integration-design",
+      "claim": "Helix's LSP integration sorts server edits into start-position order (stable since 2024-07), uses UTF-16 offset encoding by default, and owns its own lsp-types crate (helix-lsp-types) since July 2024 for long-term LSP protocol control.",
+      "body": "Synthesizes [[lsp-edits-sorted-stable]], [[lsp-default-offset-utf16]], and [[helix-lsp-types-extracted]]. These three design decisions together determine how arbitrary LSP servers interact with helix's document model.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-sonnet",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 6,
+      "directness": "reduced",
+      "obs": 3,
+      "weight": 0.9,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "lsp-edits-sorted-stable"
+        ],
+        [
+          "derived_from",
+          "lsp-default-offset-utf16"
+        ],
+        [
+          "derived_from",
+          "helix-lsp-types-extracted"
+        ]
+      ],
+      "refs": [],
+      "scope": false
+    },
+    {
+      "slug": "r3-backspace-original",
+      "claim": "Backspace on an empty command-prompt line should only delete (no-op at empty), never abort the prompt",
+      "body": "Before commit 0dc67ff8852ce99d40ad4464062ebe212b0b03a1 landed on 2024-03-09, pressing Backspace in an empty Helix command prompt had no special behaviour: the handler fell through to `self.delete_char_backwards(cx.editor)` which is a no-op on empty input. The existing abort paths were Ctrl-C / Esc. This was the ambient assumption the PR #9828 explicitly targeted.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-VERDICT",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": 0.75,
+      "valid_time": [
+        "2020-12-13",
+        "2024-03-09"
+      ],
+      "edges": [],
+      "refs": [
+        "helix-term/src/ui/prompt.rs",
+        "git:07801b60bccd0f084eae925e0290c24322de575f",
+        "git:0dc67ff8852ce99d40ad4464062ebe212b0b03a1"
+      ]
+    },
+    {
+      "slug": "r3-backspace-verdict1",
+      "claim": "Backspace on an empty prompt should abort the prompt, matching muscle-memory for shell-like inputs",
+      "body": "PR #9828 (commit 0dc67ff8852ce99d40ad4464062ebe212b0b03a1, 2024-03-09) added a guard: if the prompt line is empty when Backspace is pressed, invoke `PromptEvent::Abort` and close the prompt. The rationale was that this matches shell readline behaviour where backspace at an empty line exits the input mode. Attacks [[r3-backspace-original]] by replacing the silent no-op with an abort action.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "R3-VERDICT",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.7,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-backspace-original"
+        ],
+        [
+          "attacks",
+          "r3-backspace-original"
+        ]
+      ],
+      "refs": [
+        "git:0dc67ff8852ce99d40ad4464062ebe212b0b03a1",
+        "helix-term/src/ui/prompt.rs"
+      ]
+    },
+    {
+      "slug": "r3-backspace-verdict2",
+      "claim": "The backspace-aborts-empty-prompt change was wrong: the old no-op behaviour was less surprising, and Ctrl-C / Esc are sufficient abort paths",
+      "body": "Commit 07e21a10f065eab5491e1e4a1a7aa12000b47d59 (2024-03-26, PR #10005) explicitly reverts 0dc67ff, citing post-merge discussion in #9828: \"The old behavior was less surprising and we have other ways to abort from a prompt, so let's revert the behavior change.\" The revert removes the four-line guard entirely. This adjudicates [[r3-backspace-verdict1]] and declares it wrong: the first fix introduced surprising behaviour that violated the principle of least surprise, and Esc/Ctrl-C already cover abort. The original assumption [[r3-backspace-original]] is thereby reinstated.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "R3-VERDICT",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.95,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-backspace-verdict1"
+        ],
+        [
+          "attacks",
+          "r3-backspace-verdict1"
+        ]
+      ],
+      "refs": [
+        "git:07e21a10f065eab5491e1e4a1a7aa12000b47d59",
+        "helix-term/src/ui/prompt.rs:544"
+      ]
+    },
+    {
+      "slug": "r3-lsp-spec-compliance-a",
+      "claim": "Helix should fully comply with the LSP spec for line terminators (\\n, \\r\\n, \\r only), mapping positions correctly for all LSP servers",
+      "body": "The LSP specification requires that line terminators are exactly `\\n`, `\\r\\n`, and `\\r`. Any editor that implements LSP position encoding must correctly handle exactly these line-end sequences and no others, so that character offsets sent to and received from language servers are correct. This is the normative requirement the code comment in helix-lsp/src/lib.rs:164 acknowledges helix does not fully satisfy.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-lsp/src/lib.rs:164",
+        "git:7ebcf4e91"
+      ]
+    },
+    {
+      "slug": "r3-lsp-spec-compliance-b",
+      "claim": "Helix does not fully comply with the LSP spec for line terminators because its unicode-linebreak feature recognises additional line-break characters beyond \\n/\\r\\n/\\r",
+      "body": "The FIXME comment at helix-lsp/src/lib.rs:164 (added in commit 7ebcf4e91, 2023-02-09) documents this directly: \"Helix does not fully comply with the LSP spec for line terminators. The LSP standard requires that line terminators are ['\\n', '\\r\\n', '\\r']. Without the unicode-linebreak feature disabled, the `\\r` terminator is not handled by helix. With the unicode-linebreak feature, helix recognizes multiple extra line break chars which means that positions will be decoded/encoded incorrectly in their presence.\" Neither path is correct: one omits `\\r` support, the other adds extra breaks that break position encoding. This is a genuine open conflict that attacks [[r3-lsp-spec-compliance-a]]: the actual implementation contradicts the normative requirement and no fix has been landed.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.75,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "attacks",
+          "r3-lsp-spec-compliance-a"
+        ]
+      ],
+      "refs": [
+        "helix-lsp/src/lib.rs:164",
+        "git:7ebcf4e91"
+      ]
+    },
+    {
+      "slug": "r3-diagnostics-global-handler-a",
+      "claim": "Diagnostics display should use a single global handler; non-focused views should simply not apply cursor-line-specific rendering",
+      "body": "The HACKS comment at helix-view/src/view.rs:150 (introduced in commit 7283ef881, 2024-04-05) states: \"there should really only be a global diagnostics handler (the non-focused views should just not have different handling for the cursor line).\" This describes the architecturally correct target state: one handler, globally accessible via the Editor, with views simply rendering without per-view state.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "helix-view/src/view.rs:150",
+        "git:7283ef881"
+      ]
+    },
+    {
+      "slug": "r3-diagnostics-per-view-handler-b",
+      "claim": "Each View currently carries its own DiagnosticsHandler because a global handler would require an entity-component refactor of View and Document that is too large to do now",
+      "body": "The same HACKS block (helix-view/src/view.rs:150-156) explains why the global approach has not been implemented: \"For that we would need access to editor everywhere (we want to use the positioning code) so this can only happen by refactoring View and Document into entity component like structure. That is a huge refactor left to future work. For now we treat all views as focused and give them each their own handler.\" The per-view `diagnostics_handler` field therefore exists as an acknowledged wrong approach. This attacks [[r3-diagnostics-global-handler-a]] but is not adjudicated — the conflict is open and unresolved.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.75,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "attacks",
+          "r3-diagnostics-global-handler-a"
+        ]
+      ],
+      "refs": [
+        "helix-view/src/view.rs:150",
+        "git:7283ef881"
+      ]
+    },
+    {
+      "slug": "r3-survivor-selection-model",
+      "claim": "Selections are the primary editing construct in helix: even a single cursor is an empty single-range Selection with anchor and head positions",
+      "body": "This was inferable at write-time (2020-05-25) from the module-level doc comment in the very first selection.rs commit (44ff4d3c1): \"Selections are the primary editing construct. Even a single cursor is defined as an empty single selection range.\" The `Selection` struct held a `Vec<Range>` with a `primary_index`, with each `Range` having `anchor` and `head`. The design was already structurally committed: the entire transaction API in the same commit expressed edits as `change_by_selection`, making multi-range selection the load-bearing abstraction. There was no vim-style single-cursor mode fallback. Inferable at write-time from: (1) the module docstring explicitly encoding this invariant, (2) all edit commands operating on `Selection` uniformly, (3) no separate `Cursor` type. Has survived 8000+ commits; mechanically checkable: `grep -n 'pub struct Selection' helix-core/src/selection.rs` still shows the same invariant comment and SmallVec<[Range;1]> backing.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": [
+        "2020-05-25",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "helix-core/src/selection.rs:407",
+        "git:44ff4d3c1f5da05e57ce99ba9d67b80a334def83"
+      ]
+    },
+    {
+      "slug": "r3-survivor-ropey-text",
+      "claim": "Helix uses the ropey crate as its sole text-storage data structure; text is never stored as a plain String or byte Vec during editing",
+      "body": "Inferable at write-time (2020-06-15): commit 073fe61264 switched the project to ropey 1.2.0 and the `helix-core/Cargo.toml` listed `ropey` as a non-optional dependency. The `Rope` type was exported from `helix-core::lib.rs` as the canonical document type. The `Transaction::apply` API took a `&mut Rope`, and the `Syntax` wrapper accepted `RopeSlice` for highlighting — no String pathway existed at that point. Inferable from: (1) ropey is the only text-container in Cargo.toml, (2) `pub use ropey::Rope` re-exported from helix-core, (3) all API surfaces that touch document text accept `Rope`/`RopeSlice`. Has survived 8000+ commits through ropey version bumps (1.2 → 1.6.1); mechanically checkable: `grep 'ropey' helix-core/Cargo.toml` still shows ropey as sole text dep.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": [
+        "2020-06-15",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "helix-core/Cargo.toml",
+        "git:073fe61264d5154eb0bd37be575ccc91e17b74d7"
+      ]
+    },
+    {
+      "slug": "r3-survivor-ts-incremental",
+      "claim": "Helix uses tree-sitter with incremental re-parsing on every edit: edits are translated to InputEdit structs and the tree is updated in-place rather than re-parsed from scratch",
+      "body": "Inferable at write-time (2020-09-17): commit 088f8a82af introduced a `Syntax` struct with a `Parser` field and the comment chain from the preceding skeleton made clear that the design followed the tree-sitter API's incremental update path (parse with old_tree). By commit 36e7e2133 (2020-09-29) the function `generate_transaction_to_input_edits` was implemented and tested, converting `ChangeSet` → `Vec<tree_sitter::InputEdit>`. The design was structurally committed because: (1) tree-sitter's own API is incremental-or-nothing for non-trivial grammars; (2) the Rope-based input callback was wired directly to the parser. Has survived 276+ commits to syntax.rs; mechanically checkable: `grep -n 'InputEdit' helix-core/src/syntax.rs` still shows InputEdit usage in the parse pipeline.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.7,
+      "valid_time": [
+        "2020-09-17",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "helix-core/src/syntax.rs:1640",
+        "git:088f8a82af1b90e422c495cde92b537dedb1e419",
+        "git:36e7e2133fe1d472600cfd935b8046b8d50146c2"
+      ]
+    },
+    {
+      "slug": "r3-survivor-lsp-async-subprocess",
+      "claim": "Helix communicates with language servers by spawning each server as a child process and driving the JSON-RPC protocol asynchronously over the process stdin/stdout pipes",
+      "body": "Inferable at write-time (2020-10-15): the very first helix-lsp commit (8adcf5083) created a `Client::start(cmd, args)` that called `Command::new(cmd).stdin(Stdio::piped()).stdout(Stdio::piped())` and then wrapped the stdio with an async reader loop. The comment `// TODO: impl drop that kills the process` showed the lifecycle model was already settled as subprocess-owned-by-client. The choice of subprocess-over-stdio was structurally determined: LSP clients universally use this transport because it requires no port negotiation. Has survived 418+ commits to helix-lsp/; mechanically checkable: `grep -n 'Stdio::piped' helix-lsp/src/transport.rs` (or equivalent) still shows subprocess stdio transport.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.55,
+      "asserted": 0.65,
+      "valid_time": [
+        "2020-10-15",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "helix-lsp/src/lib.rs",
+        "git:8adcf5083ffc12532ecca7594a2192acd954dd3a"
+      ]
+    },
+    {
+      "slug": "r3-corrob-workspace-via-cargo",
+      "claim": "Helix is a Cargo workspace; its members are declared in the root Cargo.toml [workspace] list (helix-core, helix-view, helix-term, helix-lsp, helix-tui, and more).",
+      "body": "Observation #1 of this proposition, from the root Cargo.toml. See the corroboration in [[r3-corrob-workspace-via-dirs]] and the merge [[r3-corrob-workspace-merged]].",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3C1",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.8,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Cargo.toml"
+      ]
+    },
+    {
+      "slug": "r3-corrob-workspace-via-dirs",
+      "claim": "Helix's code is split across multiple crates: the helix-* directories at the repo root (helix-core, helix-view, helix-term, helix-lsp, helix-tui, ...) are the workspace's member crates.",
+      "body": "Observation #2 — derived independently (different session, different method: the directory layout, not Cargo.toml) of the same fact as [[r3-corrob-workspace-via-cargo]]. Links to it via `supports`; merged in [[r3-corrob-workspace-merged]].",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3C2",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.8,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "r3-corrob-workspace-via-cargo"
+        ]
+      ],
+      "refs": [
+        "helix-core/",
+        "helix-view/",
+        "helix-term/",
+        "helix-lsp/"
+      ]
+    },
+    {
+      "slug": "r3-corrob-workspace-merged",
+      "claim": "Corroborated by two independent observations (Cargo.toml [workspace] + the helix-* directory layout): Helix is a multi-crate Cargo workspace (helix-core / -view / -term / -lsp / -tui / ...).",
+      "body": "CORROBORATION-ACCRETION case (hand-off build-list #3): the same proposition observed two independent ways in two sessions, merged here with observation_count=2 from two `derived_from` inputs (a genuine count, not hand-set on a lone belief). This deliberately FORCES the id-identity fork (standing-fix #2). It is modeled as OBSERVATION-IDENTITY: two distinct beliefs (distinct content-ids only because the wording differs) linked by `supports` and reduced into this consensus. RECOMMENDATION: adopt observation-identity (id = hash of the full BeliefBody incl. provenance, per design doc §3) — N independent observations stay N beliefs that accrete corroboration via edges + a reducer. Under the lib's current proposition-identity (id = sha256(claim_text)), identical wording would silently collapse the two observations into ONE id and erase the second's provenance. This case is the concrete argument to switch before the edge-match scorer relies on belief identity.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-opus",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3C2",
+      "turn": 5,
+      "directness": "reduced",
+      "obs": 2,
+      "weight": 0.7,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "r3-corrob-workspace-via-cargo"
+        ],
+        [
+          "derived_from",
+          "r3-corrob-workspace-via-dirs"
+        ]
+      ],
+      "refs": []
+    }
+  ]
+}

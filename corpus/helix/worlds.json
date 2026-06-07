@@ -1,0 +1,21 @@
+{
+  "_doc": "Parallel-worlds demonstrator (design §5). See ../_worlds.py and composr/worlds.json for the model. This is a PREFERENCE dissent (vs composr's CONSTRAINT dissent) — worlds come in flavors. NOTE: the spec sketched a `kanagawa-fans` colour-theme world, but this corpus's verdict-of-verdict chain is the backspace-at-empty-prompt one, so the dissent world is grounded there instead (same flavor: a UX preference that rejects the upstream revert).",
+  "worlds": {
+    "main": { "default": true, "assumption": "least-surprise — the upstream revert stands; backspace is a no-op at an empty prompt" },
+    "shell-muscle-memory": {
+      "assumption": "users expect shell-style backspace-aborts-empty-prompt (muscle memory) over least-surprise",
+      "suppress": ["r3-backspace-verdict2"]
+    }
+  },
+  "reduction_fixtures": [
+    {
+      "query": "What does Backspace do on an empty command prompt in helix?",
+      "neighborhood": ["r3-backspace-original", "r3-backspace-verdict1", "r3-backspace-verdict2"],
+      "expected_by_world": {
+        "main": "No-op (only deletes; never aborts) — verdict2 reverted the abort change, reinstating the original behaviour.",
+        "shell-muscle-memory": "Aborts the prompt — verdict1 stands because the revert (verdict2) is suppressed under the muscle-memory assumption."
+      },
+      "status": "TARGET fixture for world-relative reduction — NOT demonstrated. Also exercises non-monotonic, frontier-relative defeat: on `main` verdict2 defeats verdict1, which REINSTATES the original; the dissent world keeps verdict1 live."
+    }
+  ]
+}

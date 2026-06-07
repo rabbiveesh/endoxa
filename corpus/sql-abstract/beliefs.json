@@ -1,0 +1,1328 @@
+{
+  "title": "SQL::Abstract",
+  "blurb": "Perl module that generates SQL (WHERE clauses, INSERT, UPDATE, SELECT, DELETE) from Perl data structures, underpinning DBIx::Class.",
+  "subject_repo": "/home/veesh/personal/sql-abstract",
+  "sessions": {
+    "S01": [
+      "s-2007-import",
+      "2007-02-07",
+      "Initial import from DBIC::SQL::Abstract into its own repo"
+    ],
+    "S02": [
+      "s-2008-refine",
+      "2008-06-12",
+      "Key empty-arrayref fix and test cleanup era"
+    ],
+    "S03": [
+      "s-2010-undoc-nest",
+      "2010-12-21",
+      "v1.72 release; -nest undocumented, injection_guard added"
+    ],
+    "S04": [
+      "s-2019-v2-rewrite",
+      "2019-01-01",
+      "Major internal rewrite toward expr/aqt architecture (v2.x branch)"
+    ],
+    "S05": [
+      "s-2021-release",
+      "2021-01-21",
+      "v2.000000 released; new extension system stable"
+    ],
+    "S06": [
+      "s-2024-fixes",
+      "2024-09-05",
+      "belch/puke made method calls; subclass override refactor fixed"
+    ],
+    "ADV": [
+      "adversarial-haiku-2026-06-04",
+      "2026-06-04",
+      "adversarial harvest: underpowered model (no tools) on tricky snippets, verified vs code"
+    ],
+    "R3-VERDICT": [
+      "r3-s1",
+      "2026-06-04",
+      "Verdict-of-a-verdict: NULLS FIRST/LAST add then revert chain"
+    ],
+    "R3-CONFLICT": [
+      "r3-s2",
+      "2026-06-04",
+      "Open un-adjudicated conflict: injection_guard vs backward compat hacks"
+    ],
+    "R3-CONFLICT2": [
+      "r3-s3",
+      "2026-06-04",
+      "Open un-adjudicated conflict: parenthesis unroller vs exact roundtripping"
+    ],
+    "R3-SURVIVOR": [
+      "r3-s4",
+      "2026-06-04",
+      "Inferred-but-correct early design decisions that survived many commits"
+    ]
+  },
+  "beliefs": [
+    {
+      "slug": "module-name-sqlabstract",
+      "claim": "The Perl package is SQL::Abstract, version 2.000001 as of the latest release.",
+      "body": "Package declaration and $VERSION variable confirm this. The canonical install name on CPAN is SQL-Abstract.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S06",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:31-35"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "license-perl-artistic",
+      "claim": "The module is dual-licensed under the same terms as Perl itself (Artistic License or GPL), as declared in Makefile.PL.",
+      "body": "Makefile.PL sets license => 'perl_5'. The POD also confirms 'same terms as perl itself'.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S01",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.58,
+      "asserted": 0.62,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Makefile.PL:7",
+        "lib/SQL/Abstract.pm:4051-4055"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "repo-on-github",
+      "claim": "The canonical upstream repository is at https://github.com/dbsrgits/sql-abstract.git (GitHub mirror of shadowcat.co.uk git).",
+      "body": "Makefile.PL resources section explicitly lists the GitHub mirror and the official shadowcat repo URL.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S01",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.55,
+      "asserted": 0.6,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Makefile.PL:44-55"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "entry-point-is-sqla-pm",
+      "claim": "The sole public API entry point is lib/SQL/Abstract.pm; all other files under lib/ are helpers, formatters, or test utilities.",
+      "body": "lib/SQL/Abstract.pm is 4057 lines and contains all four public SQL-generating methods plus the extension system. Sibling files are SQL::Abstract::Formatter, ::Parts, ::Test, ::Tree, ::Reference, ::Role/*, ::Plugin/*.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S01",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.58,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "project-scope-v1-hashref-or",
+      "claim": "In SQL::Abstract v1.x, hashrefs in WHERE clauses used OR as the default inter-key logic (matching the constructor default `logic => 'OR'`).",
+      "body": "The original nwiger code (imported 2007-02-07) defaulted logic to OR. Hash keys in WHERE were joined by OR. This was the documented behavior through the 1.x series.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S01",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": [
+        "2007-02-07",
+        "2008-11-20"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "project-scope-v1-hash-and"
+        ]
+      ],
+      "refs": [
+        "git:Starting import of SQL-A",
+        "lib/SQL/Abstract.pm:317"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "project-scope-v1-hash-and",
+      "claim": "Since at least v1.50 (2008), hashrefs in WHERE clauses are ANDed by default (the `logic` option still defaults to OR for arrays, but hashref keys are always ANDed).",
+      "body": "The POD explicitly says 'things in arrays are OR'ed, and things in hashes are AND'ed.' The code at _expand_expr checks `$kc > 1` for a hashref and calls `_expand_logop(and => $expr)`. This supersedes the earlier OR-hash behavior.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": 0.95,
+      "valid_time": [
+        "2008-11-20",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1020-1022",
+        "lib/SQL/Abstract.pm:2896-2898"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "project-scope-v2-aqt-arch",
+      "claim": "From 2019 onward, SQL::Abstract adopted an internal expr->AQT (Abstract Query Tree) two-phase architecture: expand_expr() produces a normalized AQT, render_aqt() turns it into SQL+bind.",
+      "body": "The v2 rewrite (committed across 2018-2021) introduced expand_clause, render_clause, expander/renderer registration. SQL::Abstract::Reference documents the AQT node types. The public methods still work but now delegate through this two-phase pipeline.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S04",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": [
+        "2019-01-01",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supports",
+          "expander-renderer-extension"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:922-944",
+        "lib/SQL/Abstract/Reference.pm:1-25"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "arrayref-means-or",
+      "claim": "Passing an arrayref as the value of a WHERE hash key generates OR-joined conditions: `{ col => ['a','b'] }` yields `col = ? OR col = ?`.",
+      "body": "Code at lib/SQL/Abstract.pm:1098-1109 handles ARRAY ref values by extracting logic (default OR from `$self->{logic}`) and distributing the key over elements. Tests in t/02where.t confirm the behavior.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": 0.97,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1098-1110",
+        "t/02where.t:19-29"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "arrayref-first-element-modifier",
+      "claim": "If the first element of an arrayref value is `-and` or `-or`, it overrides the logic for that list: `{ col => ['-and', {'>'=>1}, {'<'=>5}] }` generates `col > ? AND col < ?`.",
+      "body": "_expand_hashpair_ident checks if `$v->[0]` matches /^-(and|or)$/i and shifts it, using that as the subjoin logic. This is how you force AND on an otherwise OR-defaulting arrayref. POD documents this pattern.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "arrayref-means-or"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:1101-1109",
+        "lib/SQL/Abstract.pm:3040-3054"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "empty-arrayref-sqlfalse",
+      "claim": "An empty arrayref value `{ col => [] }` generates the SQL false literal (default `0=1`), not broken SQL or an error.",
+      "body": "Code at lib/SQL/Abstract.pm:1099 returns `$self->sqlfalse unless @$v`. Before commit 8a68b5b (2008-06-12) this generated broken SQL. The fix changed it to DTRT. sqltrue/sqlfalse defaults are '1=1' and '0=1' but are configurable in new().",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1099",
+        "git:fix for key => [] + tests + cleanup of 02where.t"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "scalarref-literal-sql",
+      "claim": "A scalar reference (\\$sql) in a value position injects literal SQL without placeholders: `{ col => \\\"NOW()\" }` yields `col = NOW()`.",
+      "body": "is_literal_value() checks for SCALAR ref. _expand_hashpair_ident at line 1112 handles the literal ref path. The double-ref syntax \\[\\$sql, @bind] adds bind values. This is a CAVEAT: untrusted input must never be used this way.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.93,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:72-76",
+        "lib/SQL/Abstract.pm:1112-1126",
+        "lib/SQL/Abstract.pm:3326-3350"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "double-ref-literal-with-bind",
+      "claim": "A reference-to-arrayref (\\[\\$sql, @bind]) embeds literal SQL with placeholders: `{ col => \\[\"= func(?)\", $val] }` yields `col = func(?)` with $val bound.",
+      "body": "is_literal_value() at line 73-74 checks: `ref $_[0] eq 'REF' and ref ${$_[0]} eq 'ARRAY'`. The bind values must match the current bindtype format — if bindtype is 'columns', they must be [colname, value] pairs. A major gotcha.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "scalarref-literal-sql"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:72-76",
+        "lib/SQL/Abstract.pm:3352-3380"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "undef-becomes-is-null",
+      "claim": "A hashref value of undef generates `IS NULL`: `{ col => undef }` yields `col IS NULL`. Similarly `{ col => {'!=', undef} }` yields `col IS NOT NULL`.",
+      "body": "is_undef_value() at line 78-83 detects both bare undef and `{ -value => undef }`. _expand_hashpair_ident at 1080-1082 redirects to _expand_hashpair_cmp. _dwim_op_to_is() maps equality ops to 'is' and inequality to 'is not'.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 6,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": 0.97,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:78-83",
+        "lib/SQL/Abstract.pm:1080-1082",
+        "lib/SQL/Abstract.pm:1289-1298"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "in-operator-arrayref",
+      "claim": "The `-in` operator takes an arrayref: `{ col => { -in => [1,2,3] } }` yields `col IN (?,?,?)`. An empty arrayref generates sqlfalse (0=1); `-not_in => []` generates sqltrue (1=1).",
+      "body": "_expand_in at line 1509 handles this. Line 1533 handles empty: `return $self->${ \\( $op =~ /^not/ ? 'sqltrue' : 'sqlfalse' ) } unless @rhs`. undef inside the list pukes with an audit warning.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S03",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": 0.97,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1509-1536",
+        "t/05in_between.t:10-17"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "in-undef-was-wrong-pre-1-75",
+      "claim": "Before v1.75, SQL::Abstract silently generated incorrect SQL when an -in list contained undef. This was a known incorrect behavior.",
+      "body": "The error message at lib/SQL/Abstract.pm:1522-1526 explicitly says 'SQL::Abstract before v1.75 used to generate incorrect SQL when the -in operator was given an undef-containing list: !!!AUDIT YOUR CODE AND DATA!!!'.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S03",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.94,
+      "valid_time": [
+        "2007-02-07",
+        "2013-12-27"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1522-1526"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "nest-deprecated",
+      "claim": "The `-nest` operator is deprecated and should not be used in new code. It was undocumented in 2010 and emits a warning when used.",
+      "body": "_expand_nest at line 1538 checks `$self->{warn_once_on_nest}` (set when DBIC is the calling class) and emits a belch. Commit 48d9f5f (2010-12-21) formally undocumented it. The replacement pattern is `-and => [ \\%cond0, \\@cond1, ... ]`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S03",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1538-1553",
+        "git:Undocument -nest with extreme prejudice"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "injection-guard-checks",
+      "claim": "SQL::Abstract has an injection_guard check that throws an exception if a function name or unquoted column name matches a regex containing semicolons or `GO` keywords.",
+      "body": "_assert_pass_injection_guard at line 507-514 checks `$_[1] =~ $_[0]->{injection_guard}`. The default regex checks for `;` and `^\\s*go\\s`. This is NOT applied to literal SQL (\\$sql or \\[$sql, @bind]).",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S03",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:507-514",
+        "lib/SQL/Abstract.pm:351-355"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hashref-multi-key-and",
+      "claim": "A hashref with more than one key in the WHERE position is always treated as AND regardless of the `logic` constructor option.",
+      "body": "_expand_expr at line 1020-1022: `if ($kc > 1) { return $self->_expand_logop(and => $expr) }`. The `logic` option only affects top-level arrays and single-key hashrefs with array values.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 7,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1018-1022"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "inequality-op-or-array-warning",
+      "claim": "Using a multi-element arrayref with an inequality operator (!=, <>) without `-and` generates a warning because it produces an always-true 1=1.",
+      "body": "_expand_hashtriple at line 1265-1275 detects when `$op =~ $self->{inequality_op}` and `lc($logic) eq 'or' and @values > 1`, then calls belch with a very specific message. The correct pattern is `{ col => { '!=' => ['-and', 1, 2] } }`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 8,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1265-1275"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "belch-puke-now-methods",
+      "claim": "Since August 2024 (commit be2ee60), `belch` and `puke` are method-style calls (`$self->belch(...)`) not plain function calls. Old code calling them as `belch(...)` still works due to the blessed-object check at the start.",
+      "body": "Commit be2ee60 added `Scalar::Util::blessed($_[0]) and $_[0]->isa(__PACKAGE__) and shift;` to both belch and puke. This was backported from SQL::Abstract::Classic. Allows subclasses to override error reporting.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S06",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": [
+        "2024-08-11",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:60-70",
+        "git:modify belch and puke to operate as method calls"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "singular-reader-methods-broken-before-oct-2019",
+      "claim": "Before October 2019, calling `$sqla->expander('name')` (singular, one arg) as a read operation silently fell through to the plural setter path and did nothing useful instead of returning the current value.",
+      "body": "The original eval'd method body for singular accessor just called the plural setter. Commit f34df2a (2019-10-07) fixed this: 'singular methods as readers never worked, mst is an idiot. fixed.' Now single-arg calls to expander/renderer/etc. return `$self->_ext_rw($name, @_)`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S04",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.88,
+      "valid_time": [
+        "2007-02-07",
+        "2019-10-07"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:413-430",
+        "git:singular methods as readers never worked, mst is an idiot. fixed."
+      ],
+      "scope": false
+    },
+    {
+      "slug": "wrong-hunch-subclass-comparison-was-string-ne",
+      "claim": "Subclass override detection in `__maybe_setup_subclass_overrides` compared coderefs using string `ne`, which is safe because Perl coderef stringification is stable.",
+      "body": "Prior to commit f8769bf, the code read `__PACKAGE__->can($method) ne $class->can($method)`. This looks plausible but comparing coderefs with `ne` is actually not guaranteed to work correctly across all Perl versions and can produce wrong results when undef is returned by `can`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S04",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "git:refactor subclass override handling"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "subclass-comparison-ne-was-wrong",
+      "claim": "The coderef comparison using `ne` in subclass detection was buggy — commit de47ae7 fixed subsequent errors caused by the f8769bf refactor, revealing the ne comparison was fragile and led to mistakes.",
+      "body": "Commit de47ae7 (2024-09-05) message: 'fix stupid mistakes in subclass override refactor'. The patch switched from `__PACKAGE__->can($method) ne $class->can($method)` to a `$subclassed` closure using `!=`. This is the safer and correct way to compare coderefs for identity.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S06",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "wrong-hunch-subclass-comparison-was-string-ne"
+        ],
+        [
+          "attacks",
+          "wrong-hunch-subclass-comparison-was-string-ne"
+        ]
+      ],
+      "refs": [
+        "git:fix stupid mistakes in subclass override refactor",
+        "lib/SQL/Abstract.pm:262-303"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "expander-renderer-extension",
+      "claim": "The v2 extension system allows registering custom expanders (expr->AQT) and renderers (AQT->SQL) per node type, op, or clause via `expander()`, `op_expander()`, `clause_expander()`, and their wrap_ variants.",
+      "body": "Described in POD starting at line 3685. The wrap_ variants allow middleware-style wrapping of existing handlers. Registered via the instance methods generated by the BEGIN block at lines 412-466.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S04",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "project-scope-v2-aqt-arch"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:412-466",
+        "lib/SQL/Abstract.pm:3685-3820"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "between-requires-two-defined",
+      "claim": "`-between` requires exactly an arrayref of two defined values, or a single scalar/arrayref literal. Any other combination (one value, three values, undef in the pair) throws a fatal error.",
+      "body": "_expand_between at line 1490-1507 validates: `(@rhs == 1 and ref($rhs[0]) eq 'HASH' and $rhs[0]->{-literal})` OR `(@rhs == 2 and defined($rhs[0]) and defined($rhs[1]))`. Otherwise pukes. t/05in_between.t has exhaustive invalid tests.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 9,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.94,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1490-1507",
+        "t/05in_between.t:66-84"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "insert-sorts-hash-keys",
+      "claim": "When insert() or update() is given a hashref, keys are sorted alphabetically to produce deterministic SQL and bind order. The `values()` method returns binds in the same sorted order.",
+      "body": "_expand_insert_values at line 573-575 sorts hash keys: `[ sort keys %$data ], [ @{$data}{ sort keys %$data } ]`. The PERFORMANCE section of the POD documents using this property to reuse statement handles.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 10,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.93,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:573-575",
+        "lib/SQL/Abstract.pm:3880-3896"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "array-datatypes-option",
+      "claim": "The `array_datatypes => 1` constructor option changes the meaning of arrayrefs in INSERT/UPDATE: they are passed directly to DBI as array-type bind values instead of being interpreted as `[$sql, @bind]` literal SQL.",
+      "body": "_expand_insert_value at line 641-644 checks `$self->{array_datatypes}` before treating an arrayref as a bind. Without this option, an arrayref in insert values is treated as `[$sql, @bind]` literal SQL.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 11,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:636-658",
+        "lib/SQL/Abstract.pm:2332-2351"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "open-outer-paren-for-sqlite",
+      "claim": "When a scalar-ref (literal SQL) is passed to `-in`, the module strips outer parentheses before re-wrapping them to avoid double-parens that confuse SQLite (`col IN ( (SELECT ...) )` vs `col IN (SELECT ...)`).",
+      "body": "_open_outer_paren at line 1803-1829 strips outer parens from the literal SQL. The comment says 'Some databases (SQLite) treat col IN (1, 2) different from col IN ( (1, 2) )'. Uses Text::Balanced for nested paren detection.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S03",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1800-1829"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-case-option-case-insensitive",
+      "claim": "The `case => 'lower'` constructor option likely causes ALL SQL keywords to be lowercased, not just a subset.",
+      "body": "_sqlcase at line 2046-2050 does: `return $_[0]->{case} ? $_[1] : uc($_[1])`. When case is set (to 'lower'), it passes the value through unchanged. But values are passed in lowercase already (e.g., 'insert into'). So setting case => 'lower' effectively outputs lowercase keywords.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 12,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.5,
+      "asserted": 0.6,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:2046-2050",
+        "lib/SQL/Abstract.pm:314-315"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-convert-wraps-both-sides",
+      "claim": "The `convert` option wraps both the column identifier AND the bind value in the specified SQL function, enabling symmetric case-insensitive comparisons.",
+      "body": "The `convert` option is applied to both sides via `_expand_select_clause_where` at line 789-831, which clones the SQLA object and wraps both `bind` and `ident`/`value` expanders with the conversion function. This means `convert => 'upper'` generates `WHERE UPPER(col) = UPPER(?)`, not just `UPPER(col) = ?`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S04",
+      "turn": 5,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.5,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:789-831"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "dbic-compat-special-handling",
+      "claim": "SQL::Abstract has multiple DBIx::Class-specific compatibility shims: detecting `$class->isa('DBIx::Class::SQLMaker')` to set special flags like `warn_once_on_nest`, `disable_old_special_ops`, and a custom `select.where` clause renderer.",
+      "body": "__maybe_setup_subclass_overrides at line 298-304 sets DBIC-specific opts when it detects the subclass is DBIx::Class::SQLMaker. The dbic_select_where closure strips leading/trailing whitespace from the WHERE output to match what DBIC expects.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S04",
+      "turn": 6,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:248-304"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "recurse-where-scalar-context-deprecated",
+      "claim": "Calling `_recurse_where` in scalar context is deprecated and emits a warning. DBIx::Class historically did this; the behavior is preserved but discouraged.",
+      "body": "_recurse_where at lines 1585-1595 checks `wantarray` and calls `$self->belch` with 'Calling _recurse_where in scalar context is deprecated and will go away before 2.0' if not in list context.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S04",
+      "turn": 7,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.87,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1569-1596"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "reduced-arrayref-or-semantics",
+      "claim": "The consistent rule throughout SQL::Abstract is: arrayrefs = OR, hashrefs = AND. This is the single mental model that explains all WHERE clause behavior, with `-and`/`-or` modifiers as the escape hatch.",
+      "body": "Synthesized from arrayref-means-or, hashref-multi-key-and, and the POD at line 2896. The insert-sorts-hash-keys belief is consistent with hash-always-AND. The edge cases all come from trying to express AND in an array context or OR in a hash context.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-sonnet",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 13,
+      "directness": "reduced",
+      "obs": 3,
+      "weight": 0.95,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "arrayref-means-or"
+        ],
+        [
+          "derived_from",
+          "hashref-multi-key-and"
+        ],
+        [
+          "derived_from",
+          "project-scope-v1-hash-and"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:2896-2898"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "quote-char-array-for-different-delimiters",
+      "claim": "The `quote_char` option accepts either a single character (used on both sides) or an arrayref of two characters [left, right] for databases like SQL Server that use `[column]` style quoting.",
+      "body": "_quote at line 1976-1980 handles both: `!$qref ? ($q, $q) : ($qref eq 'ARRAY') ? @{$_[0]->{quote_char}}`. The POD at line 2575-2583 gives the SQL Server example `['[',']']`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S03",
+      "turn": 6,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1976-1982",
+        "lib/SQL/Abstract.pm:2575-2583"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "reduced-literal-sql-forms",
+      "claim": "There are two forms of literal SQL: bare scalarref `\\$sql` (no bind, no injection protection) and ref-to-arrayref `\\[$sql, @bind]` (with bind values). Both bypass the injection_guard. The `-value` and `-ident` operators are the safe alternatives for column comparisons.",
+      "body": "Combining scalarref-literal-sql and double-ref-literal-with-bind observations with the injection_guard belief. The CAVEAT in POD at line 3344-3350 explicitly warns about untrusted input.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-sonnet",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S02",
+      "turn": 14,
+      "directness": "reduced",
+      "obs": 2,
+      "weight": 0.93,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "scalarref-literal-sql"
+        ],
+        [
+          "derived_from",
+          "double-ref-literal-with-bind"
+        ],
+        [
+          "derived_from",
+          "injection-guard-checks"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:3344-3350"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "haiku-empty-ne-is-false",
+      "claim": "An empty-array inequality, `{ col => { '!=' => [] } }`, generates SQL FALSE (0=1).",
+      "body": "HARVESTED from claude-haiku-4-5 (no tools), asserted 0.88.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-haiku-4-5",
+        "model": "claude-haiku-4-5"
+      },
+      "session": "ADV",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.4,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1258-1287"
+      ]
+    },
+    {
+      "slug": "empty-ne-is-true",
+      "claim": "VERDICT: inverted. _dwim_op_to_is() returns 0 for an inequality op, and the ternary is `... ? sqlfalse : sqltrue`, so 0 selects sqltrue — an empty `!=` array generates SQL TRUE (1=1), not FALSE. (The result is unintuitive, but the opposite of the claim.)",
+      "body": "Defeats [[haiku-empty-ne-is-false]]. Right that it's surprising, wrong on direction — a sign-flip on the ternary.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "ADV",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "haiku-empty-ne-is-false"
+        ],
+        [
+          "attacks",
+          "haiku-empty-ne-is-false"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:1276-1285",
+        "lib/SQL/Abstract.pm:1319-1321"
+      ]
+    },
+    {
+      "slug": "haiku-open-paren-adds",
+      "claim": "_open_outer_paren adds or ensures outer parentheses around the SQL string (it never strips them).",
+      "body": "HARVESTED from claude-haiku-4-5 (no tools), asserted ~0.85 (two related claims, both that it adds/ensures parens).",
+      "author": {
+        "kind": "agent",
+        "id": "claude-haiku-4-5",
+        "model": "claude-haiku-4-5"
+      },
+      "session": "ADV",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.4,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1509-1536"
+      ]
+    },
+    {
+      "slug": "open-paren-strips",
+      "claim": "VERDICT: FALSE — it does the OPPOSITE. _open_outer_paren iteratively STRIPS outer parens: it matches `^\\s*\\((.*)\\)\\s*$` and sets sql=inner, repeating until no full wrapper remains, so `(SELECT id FROM t)` becomes `SELECT id FROM t`. The name means 'opening up' (unwrapping), never adding.",
+      "body": "Defeats [[haiku-open-paren-adds]]. The method name 'open' was read as 'add an opening paren' rather than 'open up / unwrap'.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "ADV",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "haiku-open-paren-adds"
+        ],
+        [
+          "attacks",
+          "haiku-open-paren-adds"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:1803-1829"
+      ]
+    },
+    {
+      "slug": "r3-nulls-original",
+      "claim": "SQL::Abstract ORDER BY only supports -asc/-desc; no NULLS placement control is provided.",
+      "body": "From the original SQLA design (nwiger, 2006) through the 1.x series, the `_order_by_chunks` HASHREF handler accepted exactly one key, which must be `-desc` or `-asc`. Any attempt to pass other keys caused a `puke`. NULLS FIRST / NULLS LAST control was simply absent — the tacit assumption was that sort-direction covers all useful ORDER BY modifiers.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-VERDICT",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": null,
+      "valid_time": [
+        "2006-09-28",
+        "2013-01-26"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:1150",
+        "git:32eab2da957ea33622610a8abc271c7855147904"
+      ]
+    },
+    {
+      "slug": "r3-nulls-verdict1",
+      "claim": "NULLS FIRST/LAST is standard SQL (ISO/ANSI) and should be supported via -nulls => 'first'|'last' alongside -asc/-desc.",
+      "body": "Commit 2266ca5 (Dagfinn Ilmari Mannsåker, 2013-01-26) added a `-nulls` key to the ORDER BY hash handler. The implementation iterated all hash keys to allow both `-asc`/`-desc` and the new `-nulls` key simultaneously, generating `NULLS FIRST` or `NULLS LAST` SQL. A follow-up commit b137b07 fixed case-insensitivity for the `-nulls` value. This ATTACKS the prior assumption by treating NULLS placement as a first-class feature. [[r3-nulls-original]] was no longer true after this.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-VERDICT",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.7,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-nulls-original"
+        ],
+        [
+          "attacks",
+          "r3-nulls-original"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:1150",
+        "git:2266ca5c0bf34c24ba7fbf6448ad1c34a082f240",
+        "git:b137b0744a3aaea3df1ba497345378e9d3f8da40"
+      ]
+    },
+    {
+      "slug": "r3-nulls-verdict2",
+      "claim": "Despite being ISO/ANSI SQL, NULLS FIRST/LAST is not supported by enough databases to include in the default SQLA behavior; the feature should be reverted.",
+      "body": "Commit 5e43613 (Dagfinn Ilmari Mannsåker, 2013-04-14) reverted both 2266ca5 and b137b07 with the explicit message: 'Despite being an ISO/ANSI SQL feature, it's apparently not supported by enough databases to have by default.' This overturns [[r3-nulls-verdict1]]: the correctness of a standard does not mandate inclusion in a portability-focused abstraction. The revert restores `_order_by_chunks` to its pre-feature state and removes all `-nulls` tests. As of the current HEAD, NULLS FIRST/LAST remains absent from the codebase.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-VERDICT",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-nulls-verdict1"
+        ],
+        [
+          "attacks",
+          "r3-nulls-verdict1"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:1150",
+        "git:5e4361304e44378efe29ad97c4430cd5f5c0f1ba"
+      ]
+    },
+    {
+      "slug": "r3-inject-guard-complete",
+      "claim": "The injection_guard should detect parentheses in column names to prevent SQL injection via crafted column-name strings.",
+      "body": "In commit b625159 (ribasushi, 2010-12-21), which introduced `injection_guard`, the author added a FIXME comment directly in the implementation: '# FIXME / # need to guard against ()'s in column names too'. The comment acknowledges that unquoted column names could contain parentheses and that this opens an injection surface. The guard regex in lib/SQL/Abstract.pm currently only checks for `;` and leading `GO`, leaving `()` uncovered. From a security completeness standpoint this is a gap.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": 0.7,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:348",
+        "git:b6251592f2832d5353d37bd05e522091f20ff38f"
+      ]
+    },
+    {
+      "slug": "r3-inject-guard-compat",
+      "claim": "Guarding against parentheses in column names inside injection_guard would break many existing user hacks and is therefore not safe to add.",
+      "body": "The same FIXME comment that calls for paren-checking ends with 'but this will break tons of hacks... ideas anyone?' This captures the opposing force: SQLA has a documented tradition of permitting raw expressions as column-name-like values (function calls, aliased expressions, composite expressions) in contexts where quoting is disabled. Adding `()` to the injection guard regex would silently reject such patterns, causing regressions for any user relying on pass-through behavior. As of HEAD (2026), the FIXME remains unresolved and the paren check is absent — neither side has been adjudicated. This directly ATTACKS [[r3-inject-guard-complete]].",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": 0.7,
+      "valid_time": null,
+      "edges": [
+        [
+          "attacks",
+          "r3-inject-guard-complete"
+        ]
+      ],
+      "refs": [
+        "lib/SQL/Abstract.pm:348",
+        "git:b6251592f2832d5353d37bd05e522091f20ff38f"
+      ]
+    },
+    {
+      "slug": "r3-unroll-useful",
+      "claim": "Automatic parenthesis unrolling in SQL::Abstract::Tree's unparse() is necessary for pretty-printing and should run unconditionally.",
+      "body": "The `_unparse` method in lib/SQL/Abstract/Tree.pm calls `$self->_parenthesis_unroll($tree)` at depth-0 before rendering, with a FIXME noting 'needs a config switch to disable'. The unroller removes redundant parentheses to produce cleaner SQL output. The design history shows this was the deliberate default: commit 007f085 (2011-08-01) added the FIXME while fixing overly-eager unrolling, but kept it enabled by default. Commit bb54fcb migrated the unroller from SQL::Abstract::Test to Tree, cementing it in the public formatter API.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-CONFLICT2",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract/Tree.pm:569",
+        "git:007f08535b6449047aa3bbc02d88a41b70d2e74c",
+        "git:bb54fcba9c26"
+      ]
+    },
+    {
+      "slug": "r3-unroll-blocks-roundtrip",
+      "claim": "Unconditional parenthesis unrolling in unparse() makes exact roundtrip testing impossible without monkey-patching, representing accumulated technical debt.",
+      "body": "Commit 87abf9b (2013-06-02) introduced t/14roundtrippin.t with a prominently triple-FIXME block: 'The formatter/unparser accumulated a ton of technical debt... format() does an implicit parenthesis unroll for prettyness which makes it hard to do exact comparisons'. The test works around this by monkey-patching `_parenthesis_unroll` to a no-op for roundtrip verification (see t/14roundtrippin.t:58). This is a structural acknowledgment that [[r3-unroll-useful]] and exact-roundtrip correctness are in unresolved tension: as of HEAD, both the unroll-by-default behavior and the FIXME note requesting a config switch remain in place, with no adjudication.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-CONFLICT2",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.7,
+      "asserted": 0.8,
+      "valid_time": null,
+      "edges": [
+        [
+          "attacks",
+          "r3-unroll-useful"
+        ]
+      ],
+      "refs": [
+        "t/14roundtrippin.t:37",
+        "lib/SQL/Abstract/Tree.pm:569",
+        "git:87abf9bc3395870cef72a3f00b7d4cfe18abd980"
+      ]
+    },
+    {
+      "slug": "r3-array-or-default",
+      "claim": "Arrayref values in WHERE clauses are joined with OR by default.",
+      "body": "Inferable from the first commit (32eab2d, 2006-09-28): the original nwiger design states 'things in arrays are OR'ed, and things in hashes are AND'ed'. The `new()` constructor sets `logic => 'OR'` as the default. At write time this was inferable because: (1) the docs explicitly describe the OR-for-arrays semantics, (2) the `new()` code path sets the default without condition. No later change altered this default — it survived the LDAMI refactor (96449e8, 2008), the Moo conversion (3a9aca0, 2012), and 554+ subsequent commits to lib/SQL/Abstract.pm. Mechanically checkable: `SQL::Abstract->new->where([{a => 1}, {b => 2}])` produces `WHERE a = ? OR b = ?`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SURVIVOR",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": [
+        "2006-09-28",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:317",
+        "git:32eab2da957ea33622610a8abc271c7855147904"
+      ]
+    },
+    {
+      "slug": "r3-sqlcase-inverted",
+      "claim": "The `case` option uses an inverted boolean: a truthy `case` means lowercase SQL, and the absence of `case` (or any non-'lower' value) means uppercase SQL.",
+      "body": "Inferable from 32eab2d (2006-09-28): `delete $opt{case} if $opt{case} && $opt{case} ne 'lower'` — any non-'lower' value is deleted, leaving only 'lower' or undef. `_sqlcase` then checks `if $self->{case}` to decide whether to lowercase. At write time this was inferable structurally: the delete-if-not-lower pattern encodes a two-state machine where truthiness means exactly one thing ('lower'). LDNOTE commented in 96449e8 (2008-10-16): 'if $self->{case} is true, then it contains 'lower', so we don't touch the argument ... crooked logic, but let's not change it!' — a human author acknowledged the smell but preserved the invariant. It survived ~554 commits including the Moo conversion. Mechanically checkable: `SQL::Abstract->new(case=>'lower')->where({a=>1})` produces lowercase SQL.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SURVIVOR",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.68,
+      "valid_time": [
+        "2006-09-28",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:313",
+        "lib/SQL/Abstract.pm:2046",
+        "git:32eab2da957ea33622610a8abc271c7855147904",
+        "git:96449e8ea5159e5448ebfc81dfa200dc674f366b"
+      ]
+    },
+    {
+      "slug": "r3-sqltrue-constants",
+      "claim": "The SQL literals for boolean true and false default to '1=1' and '0=1' respectively, and are configurable but unlikely to change in typical usage.",
+      "body": "Inferable from 96449e8 (Laurent Dami, 2008-10-16): `$opt{sqltrue} ||= '1=1'` and `$opt{sqlfalse} ||= '0=1'`. At write time these were inferable as stable defaults because: (1) they are universally recognized portable SQL boolean idioms, (2) the `||=` idiom signals that overriding is possible but the defaults are the expected path. Mechanically checkable: `SQL::Abstract->new->{sqltrue}` returns '1=1'. The constants survived ~551 commits to lib/SQL/Abstract.pm after they were introduced, including major refactors (Moo, the AQT rewrite). No commit changed the default values themselves.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SURVIVOR",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.68,
+      "valid_time": [
+        "2008-10-16",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:334",
+        "git:96449e8ea5159e5448ebfc81dfa200dc674f366b"
+      ]
+    },
+    {
+      "slug": "r3-equality-quickfix-stale",
+      "claim": "The `equality_op`/`inequality_op` regex pair is a temporary quickfix introduced in 2007/2008 that should eventually be replaced by a more seasoned API, but has not been.",
+      "body": "Inferable from 96449e8 (Laurent Dami, 2008-10-16): the comment 'temporary quickfix (in 2007), should go through a more seasoned API' accompanies `$opt{equality_op} = qr/...` and `$opt{inequality_op} = qr/...`. At write time this was inferable as unstable: the author's own comment signals design debt. Despite that, the regexes survived ~551 commits and are still in-place in the current codebase as the primary mechanism for recognizing equality/inequality operators. The 'temporary' label was later amended to include '(in 2007)' making the staleness explicit. Mechanically checkable: `lib/SQL/Abstract.pm` line 325-328 still contains the 'temporary quickfix' comment and the same regex shapes.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SURVIVOR",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.55,
+      "asserted": 0.6,
+      "valid_time": [
+        "2008-10-16",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "lib/SQL/Abstract.pm:325",
+        "git:96449e8ea5159e5448ebfc81dfa200dc674f366b"
+      ]
+    }
+  ]
+}

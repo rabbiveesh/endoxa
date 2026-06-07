@@ -1,0 +1,30 @@
+{
+  "_doc": "Parallel-worlds demonstrator (design §5). A world is a SET OF HEADS over the shared, immutable belief DAG — authored here as a diff from `main`; it compiles to a frontier at load time (see ../_worlds.py). `suppress` lists slugs whose SUPERSESSION/ADJUDICATION (the relation, not the proposition) is dropped on this world's frontier, so the beliefs they defeated stay live. The `assumption` is the world's identity, not decoration.",
+  "worlds": {
+    "main": { "default": true, "assumption": "default frontier — cold-start speed and native handling win" },
+    "conservative": {
+      "assumption": "a reachable composer binary / backward-compat outranks cold-start speed",
+      "suppress": ["native-post-autoload", "plugin-policy-three-tier"]
+    }
+  },
+  "reduction_fixtures": [
+    {
+      "query": "How does composr run the post-autoload-dump lifecycle event?",
+      "neighborhood": ["delegate-all-post-autoload", "native-post-autoload", "hybrid-mode-philosophy"],
+      "expected_by_world": {
+        "main": "Natively: composr replaces Laravel's `package:discover` and the clearCompiled handler, reaching 0 composer subprocess calls on a cold install.",
+        "conservative": "By delegating the whole post-autoload-dump event to `composer run-script` — native handling is suppressed, and under the backward-compat assumption the reducer prefers delegation among the live options."
+      },
+      "status": "TARGET fixture for world-relative reduction — NOT demonstrated. Requires the L3 reducer to actually run over each frontier; this file only fixes what divergence the two frontiers should produce."
+    },
+    {
+      "query": "How does composr handle composer plugins by default?",
+      "neighborhood": ["plugins-all-delegated", "plugin-policy-three-tier"],
+      "expected_by_world": {
+        "main": "Three-tier policy: natively replicate known plugins (pest, spi), treat some as inert, delegate the unknown.",
+        "conservative": "Delegate every plugin to `composer run-script` (native replication suppressed)."
+      },
+      "status": "TARGET fixture — NOT demonstrated."
+    }
+  ]
+}

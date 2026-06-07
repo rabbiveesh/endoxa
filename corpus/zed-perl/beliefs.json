@@ -1,0 +1,692 @@
+{
+  "title": "zed-perl",
+  "blurb": "A Zed editor extension that wires up Perl syntax highlighting (via tree-sitter-perl) and the PerlNavigator LSP.",
+  "subject_repo": "/home/veesh/personal/zed-perl",
+  "sessions": {
+    "S1": [
+      "seed-explore-01",
+      "2024-08-03",
+      "First commit: grammar + highlights only"
+    ],
+    "S2": [
+      "seed-explore-02",
+      "2024-09-08",
+      "Rust extension + npm then GitHub-release approach"
+    ],
+    "S3": [
+      "seed-explore-03",
+      "2024-09-19",
+      "Fix captures naming, add PATH-first binary check, Windows support"
+    ],
+    "S4": [
+      "seed-explore-04",
+      "2024-11-29",
+      "Workspace configuration contributed by Yusei Ueno"
+    ],
+    "S5": [
+      "seed-explore-05",
+      "2025-02-10",
+      "README instructions for PerlNavigator + version bump"
+    ],
+    "ADV": [
+      "adversarial-haiku-2026-06-04",
+      "2026-06-04",
+      "adversarial harvest: underpowered model (no tools) on tricky snippets, verified vs code"
+    ]
+  },
+  "beliefs": [
+    {
+      "slug": "extension-id-is-perl",
+      "claim": "The Zed extension id is 'perl' and the extension name is 'Perl'.",
+      "body": "Declared in extension.toml top-level fields `id = 'perl'` and `name = 'Perl'`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "extension.toml:1-2"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "mit-licensed",
+      "claim": "The project is MIT licensed, copyright Avishai 'Veesh' Goldman 2024.",
+      "body": "LICENSE file contains a standard MIT license header naming Avishai \"Veesh\" Goldman.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "LICENSE:1"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "crate-type-cdylib",
+      "claim": "The Rust crate compiles to a cdylib, which Zed loads as a WebAssembly extension.",
+      "body": "Cargo.toml sets `crate-type = [\"cdylib\"]` with `lib.path = \"src/perl.rs\"`. The compiled output `extension.wasm` is checked in.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Cargo.toml:8-9"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "lsp-server-id-perlnavigator-server",
+      "claim": "The language server is registered under the id 'perlnavigator-server' in both extension.toml and the Zed JSON settings key.",
+      "body": "extension.toml defines `[language_servers.perlnavigator-server]`. The README JSON snippet shows `\"lsp\": { \"perlnavigator-server\": { ... } }` as the settings key users must use.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.68,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "extension.toml:13-16",
+        "README.md:18-30"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "lsp-started-with-stdio",
+      "claim": "PerlNavigator is always started with a single `--stdio` argument and no special environment variables.",
+      "body": "`language_server_command` returns `zed::Command { command: <path>, args: vec![\"--stdio\".to_string()], env: Default::default() }`. No env injection occurs.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": 0.75,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/perl.rs:111-116"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "path-first-binary-resolution",
+      "claim": "Before downloading PerlNavigator from GitHub, the extension checks if `perlnavigator` is already on the user's PATH via `worktree.which()`.",
+      "body": "Lines 15-17 of src/perl.rs call `worktree.which(\"perlnavigator\")` and return immediately if found. This was added in commit 011deca, which previously always attempted to download.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.8,
+      "asserted": 0.85,
+      "valid_time": [
+        "2024-09-19",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "old-always-downloads"
+        ]
+      ],
+      "refs": [
+        "src/perl.rs:15-17",
+        "git:feat(perlnavigator): use locally installed version or else download from github"
+      ]
+    },
+    {
+      "slug": "old-always-downloads",
+      "claim": "The initial GitHub-release implementation always downloaded the binary regardless of whether the user had perlnavigator installed locally.",
+      "body": "The 88471b7 commit introduced GitHub release downloads but did not check PATH first. The check was added later in 011deca.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 5,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.75,
+      "asserted": 0.8,
+      "valid_time": [
+        "2024-09-08",
+        "2024-09-19"
+      ],
+      "edges": [],
+      "refs": [
+        "git:feat: switch to github release until the next npm version is out"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "aarch64-unsupported",
+      "claim": "ARM64 (aarch64) and 32-bit x86 are explicitly unsupported architectures; the extension returns an error for them.",
+      "body": "The asset_name format block in src/perl.rs returns `Err(format!(\"unsupported architecture: {arch:?}\"))` for both `Architecture::Aarch64` and `Architecture::X86`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/perl.rs:46-51"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "windows-exe-extension",
+      "claim": "On Windows the binary path appends `.exe`; on macOS and Linux no extension is appended.",
+      "body": "The `binary_path` format string uses a match on platform: `Mac | Linux => \"\"`, `Windows => \".exe\"`. Added in commit 4a173b0 with the comment 'grumble: windows support'.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/perl.rs:63-66",
+        "git:grumble: windows support"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "asset-name-no-zip-suffix-then-searched-with-zip",
+      "claim": "The `asset_name` variable is constructed WITHOUT the `.zip` suffix, but the asset lookup searches for `{asset_name}.zip`; the binary path inside the zip uses the bare asset_name as a subdirectory.",
+      "body": "This was a bug in commit 88471b7 where `asset_name` included `.zip` and the find query was exact equality — the path also wrongly used `perlnavigator` at root of version_dir. Fixed in 011deca: asset_name drops the suffix, find appends `.zip`, and binary_path includes `{asset_name}/` subdirectory.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/perl.rs:38-58",
+        "git:feat(perlnavigator): use locally installed version or else download from github"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "wrong-capture-names-initially",
+      "claim": "The initial highlights.scm used Neovim/generic tree-sitter capture names like `@include`, `@conditional`, `@repeat` rather than Zed's namespaced forms.",
+      "body": "Commit 4eef601 renamed captures: `@include` -> `@keyword.include`, `@conditional` -> `@keyword.conditional`, `@conditional.ternary` -> `@operator.conditional`, `@repeat` -> `@keyword.repeat`, `@exception` -> `@keyword.exception`. The injections.scm still carries a comment '`; an scm file for nvim-treesitter`' suggesting copy-paste origin.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 5,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.85,
+      "valid_time": [
+        "2024-08-03",
+        "2024-09-19"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "scope-grammar-only"
+        ]
+      ],
+      "refs": [
+        "git:fix: use more appropriate captures for zed",
+        "languages/perl/injections.scm:1"
+      ]
+    },
+    {
+      "slug": "human-verdict-oniguruma-hack-was-wrong",
+      "claim": "The vscode-oniguruma directory-copy hack (move_oniguruma_super_evil) was an incorrect workaround that the maintainer explicitly labeled evil and removed.",
+      "body": "Commit bc94c30 ('fix: remove evil oniguruma hack') deleted the `copy_dir_all` helper and `move_oniguruma_super_evil` function. The npm-based approach tried to fix a dependency resolution issue by physically copying vscode-oniguruma into perlnavigator-server's nested node_modules — a side-effect hack that was abandoned when the approach switched to GitHub binary releases.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S2",
+      "turn": 6,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": 0.95,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "hunch-oniguruma-necessary"
+        ],
+        [
+          "attacks",
+          "hunch-oniguruma-necessary"
+        ]
+      ],
+      "refs": [
+        "git:fix: remove evil oniguruma hack"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-oniguruma-necessary",
+      "claim": "The oniguruma copy hack was probably necessary to make the npm-installed perlnavigator-server actually start, since vscode-oniguruma would not resolve in the nested package layout.",
+      "body": "The npm approach installed `perlnavigator-server` which depends on `vscode-oniguruma`; it seemed the nested node resolution was failing and the hack was the only fix. But the whole npm approach was abandoned, so this is moot.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 7,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "git:feat: setup perlnavigator via npm (needs help tho)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "workspace-config-by-external-contributor",
+      "claim": "The language_server_workspace_configuration method was not written by the original author; it was contributed by Yusei Ueno in PR #3.",
+      "body": "Commit f2554c0 by 'Yusei Ueno <y.say1125@gmail.com>' added the `language_server_workspace_configuration` impl. The original code only forwarded the binary path and --stdio arg.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/perl.rs:118-128",
+        "git:[#2] feat: support workspace configuration"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-injections-not-used-by-zed",
+      "claim": "The injections.scm file may not be actively used by Zed since it still carries an nvim-treesitter comment, and Zed may require different injection syntax.",
+      "body": "The file header says '`; an scm file for nvim-treesitter`' and injects `comment` and `pod` languages. It's unclear whether Zed's injection engine supports the same directives. Low confidence — no evidence either way in the git log.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 6,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.5,
+      "asserted": 0.55,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "languages/perl/injections.scm:1"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "scope-grammar-only",
+      "claim": "At project inception (2024-08-03) the extension was purely declarative: grammar config, highlight queries, and injection/outline queries — no Rust code or LSP integration.",
+      "body": "The FIRST COMMIT (650f370) only adds .gitignore, extension.toml, and files under languages/perl/. Cargo.toml and src/perl.rs did not exist yet.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": [
+        "2024-08-03",
+        "2024-09-08"
+      ],
+      "edges": [],
+      "refs": [
+        "git:feat: FIRST COMMIT"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "scope-npm-based-lsp",
+      "claim": "From 2024-09-08, the extension added a Rust extension that installed PerlNavigator via npm (`perlnavigator-server` package), including a hack to relocate vscode-oniguruma.",
+      "body": "Commits f845a03 and bc94c30 show the npm phase: `PACKAGE_NAME = \"perlnavigator-server\"`, `SERVER_PATH = \"node_modules/.bin/perlnavigator\"`. The oniguruma hack existed briefly before removal.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 8,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": [
+        "2024-09-08",
+        "2024-09-08"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "scope-grammar-only"
+        ]
+      ],
+      "refs": [
+        "git:feat: setup perlnavigator via npm (needs help tho)",
+        "git:fix: remove evil oniguruma hack"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "scope-github-release-lsp",
+      "claim": "From 2024-09-08 (88471b7) onward, the extension downloads PerlNavigator from GitHub binary releases instead of npm, using `zed::latest_github_release(\"bscan/PerlNavigator\")`.",
+      "body": "Commit 88471b7 replaced the npm approach entirely with GitHub release download logic. The version directory and cached binary path pattern used today was established here.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 9,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": [
+        "2024-09-08",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "scope-npm-based-lsp"
+        ]
+      ],
+      "refs": [
+        "git:feat: switch to github release until the next npm version is out",
+        "src/perl.rs:29-35"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "old-cleanup-deletes-stale-versions",
+      "claim": "After downloading a new version, the extension deletes all sibling directories that are not the newly downloaded version_dir.",
+      "body": "Lines 84-91 of src/perl.rs read the working directory and call `fs::remove_dir_all` on any entry whose name doesn't match `version_dir`. This is a cleanup to prevent accumulation of old release downloads.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 7,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/perl.rs:84-91"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "outline-only-packages-and-subs",
+      "claim": "The outline.scm only surfaces package declarations and subroutine declarations as outline items; no methods, classes, or variables.",
+      "body": "outline.scm contains exactly two item patterns: `(package_statement ...)` and `(subroutine_declaration_statement ...)`. No method_declaration_statement or class_statement is included.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.8,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "languages/perl/outline.scm:1-12"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "reducer-binary-resolution-strategy",
+      "claim": "The binary resolution strategy is: (1) check PATH via worktree.which, (2) check in-memory cache, (3) download from GitHub releases. Only the download path updates the cache.",
+      "body": "Synthesized from [[path-first-binary-resolution]], [[scope-github-release-lsp]], and [[lsp-started-with-stdio]]. The three-step priority is clear from reading src/perl.rs lines 15-96.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-sonnet",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 8,
+      "directness": "reduced",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "path-first-binary-resolution"
+        ],
+        [
+          "derived_from",
+          "scope-github-release-lsp"
+        ],
+        [
+          "derived_from",
+          "lsp-started-with-stdio"
+        ]
+      ],
+      "refs": [
+        "src/perl.rs:15-96"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "extension-version-bump-history",
+      "claim": "The extension version in extension.toml was bumped from 0.1.0 to 0.1.1 in the last commit (f0292b8), but Cargo.toml still reads 0.1.0.",
+      "body": "extension.toml shows `version = '0.1.1'` while Cargo.toml shows `version = \"0.1.0\"`. The two version numbers are out of sync. Commit f0292b8 only changed README.md and extension.toml.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.75,
+      "asserted": 0.8,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "extension.toml:4",
+        "Cargo.toml:3",
+        "git:docs: perlnavigator instuctions + bump"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "haiku-zip-double-ext",
+      "claim": "A likely previous bug here appended '.zip' inside the asset_name format!, producing a double '.zip.zip' extension in the asset search.",
+      "body": "HARVESTED from claude-haiku-4-5 (no tools), asserted 0.6 — appropriately hedged, and still wrong about the bug's nature.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-haiku-4-5",
+        "model": "claude-haiku-4-5"
+      },
+      "session": "ADV",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.4,
+      "asserted": 0.6,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/perl.rs:38-58"
+      ]
+    },
+    {
+      "slug": "zip-was-dir-path-bug",
+      "claim": "VERDICT: wrong about the bug. Pre-011deca, asset_name DID embed '.zip' and was compared with `== asset_name`, so the asset SEARCH was correct (no '.zip.zip'). The real bug: that same '.zip'-bearing asset_name was reused to build the binary_path directory, so it looked for a literal 'perlnavigator-linux-x86_64.zip/' subdir in the archive. The fix split the extension out and appended it only in the find call.",
+      "body": "Defeats [[haiku-zip-double-ext]]. Plausible bug guessed; the actual prior bug was a different one (extension leaking into a directory path).",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "ADV",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "haiku-zip-double-ext"
+        ],
+        [
+          "attacks",
+          "haiku-zip-double-ext"
+        ]
+      ],
+      "refs": [
+        "src/perl.rs (git:011deca)"
+      ]
+    },
+    {
+      "slug": "haiku-injection-ee-separate",
+      "claim": "In injections.scm the #match?/#not-match? pair matches exactly one `e` modifier BECAUSE `ee` needs separate handling with different (nested-eval) injection logic.",
+      "body": "HARVESTED from claude-haiku-4-5 (no tools), asserted 0.95 — right on the WHAT, wrong on the WHY.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-haiku-4-5",
+        "model": "claude-haiku-4-5"
+      },
+      "session": "ADV",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.4,
+      "asserted": 0.95,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "languages/perl/injections.scm:8-14"
+      ]
+    },
+    {
+      "slug": "injection-regex-expressibility",
+      "claim": "VERDICT: the effect is right (the pair does express 'exactly one e'), but the REASON is fabricated. There is NO separate `ee` injection rule — `ee` is simply left unhandled. The two predicates exist only because tree-sitter regex predicates can't count or use lookaheads, so 'exactly one e' needs match-at-least-one + not-match-two.",
+      "body": "Defeats [[haiku-injection-ee-separate]]. Right answer, invented justification — a confabulated rationale at 0.95.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "ADV",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "haiku-injection-ee-separate"
+        ],
+        [
+          "attacks",
+          "haiku-injection-ee-separate"
+        ]
+      ],
+      "refs": [
+        "languages/perl/injections.scm:1-15"
+      ]
+    }
+  ]
+}

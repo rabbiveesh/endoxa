@@ -1,0 +1,950 @@
+{
+  "title": "tree-sitter-pod",
+  "blurb": "A tree-sitter grammar and external scanner for Perl's POD documentation format, used by perl-lsp for syntax highlighting and document rendering.",
+  "subject_repo": "/home/veesh/personal/tree-sitter-pod",
+  "sessions": {
+    "S1": [
+      "session-init-2023-01",
+      "2023-01-17",
+      "initial grammar scaffolding: head paragraphs, plain, verbatim, sequences"
+    ],
+    "S2": [
+      "session-fixes-2023-02",
+      "2023-02-23",
+      "infinite-loop fixes for broken intseqs and verbatim paragraphs"
+    ],
+    "S3": [
+      "session-chevrons-2023-03",
+      "2023-03-03",
+      "multi-chevron interior sequence support by LeoNerd"
+    ],
+    "S4": [
+      "session-generic-cmd-2023-09",
+      "2023-09-30",
+      "genericise commands, rename directive->command, ADVANCE_C side-effect refactor"
+    ],
+    "S5": [
+      "session-begin-end-2026-03",
+      "2026-03-22",
+      "=begin/=end data regions, =for paragraphs, modernise bindings"
+    ],
+    "S6": [
+      "session-escape-seq-2026-05",
+      "2026-05-31",
+      "E<...> as distinct escape_sequence node, v1.1.0 release"
+    ],
+    "R3-VoV": [
+      "r3-vov-agent",
+      "2026-06-04",
+      "Verdict-of-verdict: indented_block introduced then reverted within 24 hours"
+    ],
+    "R3-CONFLICT": [
+      "r3-conflict-agent",
+      "2026-06-04",
+      "Open un-adjudicated conflict: spec requires blank line before command but scanner accepts omission"
+    ],
+    "R3-SURVIVORS": [
+      "r3-survivors-agent",
+      "2026-06-04",
+      "Inferred-but-correct survivors: early design decisions that have remained unchanged"
+    ]
+  },
+  "beliefs": [
+    {
+      "slug": "repo-is-tree-sitter-pod",
+      "claim": "The repository is named tree-sitter-pod and lives under the tree-sitter-perl GitHub org.",
+      "body": "package.json 'name' field is 'tree-sitter-pod' and the repository URL is https://github.com/tree-sitter-perl/tree-sitter-pod.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "package.json:7-9"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "license-artistic-2",
+      "claim": "The project is licensed under Artistic-2.0 (not MIT); it was originally started without any formal license file.",
+      "body": "The LICENSE file and package.json license field were changed to Artistic-2.0 in commit a50d3b6. Before that commit the repo had an MIT-ish stub. Cargo.toml and tree-sitter.json also carry the Artistic-2.0 identifier.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.68,
+      "valid_time": null,
+      "edges": [
+        [
+          "supersedes",
+          "license-was-missing"
+        ]
+      ],
+      "refs": [
+        "package.json:22",
+        "Cargo.toml:5",
+        "tree-sitter.json:18",
+        "git:Change license to Artistic-2.0"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "license-was-missing",
+      "claim": "Before November 2023 the repo had no LICENSE file at all.",
+      "body": "The initial commit history shows no license file; 'Add license file' (1a9d75c) and 'Change license to Artistic-2.0' (a50d3b6) both landed 2023-11-19.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.7,
+      "asserted": 0.75,
+      "valid_time": [
+        "2023-01-17",
+        "2023-11-18"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Add license file",
+        "git:Change license to Artistic-2.0"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "rust-crate-name",
+      "claim": "The Rust crate is named ts-parser-pod, not tree-sitter-pod.",
+      "body": "Cargo.toml [package] name = 'ts-parser-pod'. This was changed from 'tree-sitter-pod' in commit fc34a65 ('chore: rename Rust crate to ts-parser-pod') on 2026-03-23.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "Cargo.toml:2",
+        "git:chore: rename Rust crate to ts-parser-pod"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "generated-c-not-in-git",
+      "claim": "The generated C parser (src/parser.c and src/grammar.json) is .gitignored; developers must run 'npx tree-sitter generate' after grammar changes.",
+      "body": "README.md explicitly states 'the generated C source code (stored in the src directory) is .gitignored' and instructs running 'npx tree-sitter generate'. The src/ directory visible in the repo contains scanner.c (handwritten) plus the generated files committed separately for release.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.7,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "README.md:17-22"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "entry-is-grammar-js",
+      "claim": "The grammar entry point is grammar.js; it defines all rules and declares the 10 external tokens consumed by scanner.c.",
+      "body": "grammar.js at line 1 exports a grammar() call. The externals array at lines 3-14 declares all 10 external token symbols (_eol, _start_command, _start_plain, _start_verbatim, _content_plain, _intseq_letter, _intseq_start, _intseq_end, _data_section, _intseq_escape_letter).",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.58,
+      "asserted": 0.62,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "grammar.js:1-14"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "scope-initial-head-paragraphs",
+      "claim": "In January 2023 the grammar only handled specific named paragraphs (=head1..=head6, =over, =item, =back, =encoding) as distinct typed nodes; any other =cmd was unparsed.",
+      "body": "The initial grammar had head_paragraph, over_paragraph, item_paragraph, back_paragraph, encoding_paragraph as separate rules. The commit 'Recognise any kind of Pod command' (cc1411d, 2023-09-30) replaced them all with a single generic command_paragraph + command token.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": [
+        "2023-01-17",
+        "2023-09-29"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "scope-generic-command-paragraph"
+        ]
+      ],
+      "refs": [
+        "git:Recognise any kind of Pod command, not just specifically-coded ones"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "scope-generic-command-paragraph",
+      "claim": "Since 2023-09-30 all =cmd paragraphs (other than =pod, =cut, =begin/=end, =for) are parsed as generic command_paragraph nodes with a command token matching /=[a-zA-Z]\\S*/.",
+      "body": "grammar.js line 55-56: command_paragraph uses command = token(/=[a-zA-Z]\\S*/), letting any unknown =cmd through. Highlights.scm uses #match? and #not-match? predicates to differentiate =head, =over, =item, =encoding from the generic fallback.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": [
+        "2023-09-30",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "grammar.js:55-56",
+        "queries/highlights.scm:10-33"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "scope-no-begin-end",
+      "claim": "Before March 2026 the grammar had no support for =begin/=end data regions or =for paragraphs.",
+      "body": "PR #13 'support-begin-end-for' merged 2026-03-22 added begin_paragraph, for_paragraph, format_name, and the _data_section external token. The grammar.json was updated in the same batch.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.88,
+      "valid_time": [
+        "2023-01-17",
+        "2026-03-21"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "scope-begin-end-supported"
+        ]
+      ],
+      "refs": [
+        "git:feat: support =begin/=end data regions and =for paragraphs"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "scope-begin-end-supported",
+      "claim": "Since 2026-03-22 the grammar models =begin/=end blocks as begin_paragraph with a data child node, and =for paragraphs as for_paragraph, using a new external token _data_section.",
+      "body": "grammar.js lines 37-50 define begin_paragraph and for_paragraph. _data_section (TOKEN_DATA_SECTION in scanner.c) consumes all text until a bare =end at column 0.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": [
+        "2026-03-22",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "grammar.js:37-50",
+        "src/scanner.c:162-221"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "verbatim-no-intseq",
+      "claim": "Verbatim paragraphs (lines starting with whitespace) do not parse interior sequences; B<bold> inside a verbatim block is treated as literal text.",
+      "body": "grammar.js line 60 uses _content_plain (not _content) for verbatim_paragraph. scanner.c lines 287-294 check valid_symbols[TOKEN_INTSEQ_LETTER] before emitting TOKEN_INTSEQ_LETTER or TOKEN_INTSEQ_ESCAPE_LETTER, so a verbatim context never triggers sequence parsing. Fix landed in commit 5f3639c.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [
+        [
+          "attacks",
+          "wrong-verbatim-has-intseq"
+        ]
+      ],
+      "refs": [
+        "grammar.js:60",
+        "src/scanner.c:282-294",
+        "git:fix: don't accept an intseq in verbatim (will close #4)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "wrong-verbatim-has-intseq",
+      "claim": "Interior sequences should be recognised inside verbatim paragraphs because the scanner emits TOKEN_INTSEQ_LETTER whenever it sees a capital letter followed by '<'.",
+      "body": "This was the initial behaviour before fix 5f3639c. The scanner originally called TOKEN(TOKEN_INTSEQ_LETTER) unconditionally on 'X<' without checking valid_symbols, so verbatim paragraphs would incorrectly parse B<1> as a sequence.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "git:fix: don't accept an intseq in verbatim (will close #4)"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "verbatim-fix-was-needed",
+      "claim": "The assumption that verbatim paragraphs were correctly excluding interior sequences was wrong before 2023-02-25; the scanner emitted INTSEQ_LETTER unconditionally on any uppercase letter followed by '<'.",
+      "body": "Commit 5f3639c diff shows the original code: 'if(c == \"<\") { TOKEN(TOKEN_INTSEQ_LETTER); }' with no valid_symbols gate. The fix adds 'valid_symbols[TOKEN_INTSEQ_LETTER]' as a guard.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S2",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": 0.98,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "wrong-verbatim-has-intseq"
+        ],
+        [
+          "attacks",
+          "wrong-verbatim-has-intseq"
+        ]
+      ],
+      "refs": [
+        "git:fix: don't accept an intseq in verbatim (will close #4)",
+        "src/scanner.c:287-294"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "multi-chevron-intseq",
+      "claim": "Interior sequences support multiple opening chevrons (e.g. C<< inner->arrows >>) where the closing delimiter must be the same number of '>' chars.",
+      "body": "scanner.c lines 252-262 count consecutive '<' chars when TOKEN_INTSEQ_START is valid and push the count onto a per-nesting stack (chevron_count). Closing at lines 270-280 requires consuming exactly that many '>' chars. The stack holds up to MAX_NESTED_CHEVRONS=8 levels; deeper nesting defaults to 1.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/scanner.c:51-57",
+        "src/scanner.c:252-262",
+        "src/scanner.c:270-280"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "shorter-run-does-not-close",
+      "claim": "A run of '>' characters shorter than the opening count does NOT close the interior sequence; only an exact count (or more) closes it.",
+      "body": "The original code (before fix fff3b6a) would pop the chevron stack as soon as it consumed one fewer '>' and the loop exited, regardless of whether count had hit zero. Fix fff3b6a added 'if(!count)' guard. Test case 'Does not consume shorter sequence of >' in test/corpus/interior-sequences confirms.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/scanner.c:270-280",
+        "test/corpus/interior-sequences:63-72",
+        "git:Don't end an interior sequence on a shorter run of '>' chars"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "advance-c-side-effects-c",
+      "claim": "The ADVANCE_C macro both calls lexer->advance and updates the local variable 'c' to lexer->lookahead as a side effect.",
+      "body": "src/scanner.c lines 16-29 define ADVANCE_C. The final line inside the do-while is 'c = lexer->lookahead;'. Before commit 18506fc this assignment was done manually after each ADVANCE call; the refactor moved it into the macro. Any code using ADVANCE_C must declare 'int c' in scope before the macro invocation.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/scanner.c:16-29",
+        "git:Side-effect the c variable inside ADVANCE_C macro"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "zero-width-plain-loop",
+      "claim": "If TOKEN_CONTENT_PLAIN is emitted at the start of a line beginning with '=' (with got_plain=false), tree-sitter will spin forever because it receives a zero-width token at the same position.",
+      "body": "scanner.c lines 321-329: after seeing a '=' at the start of a line (at_linefeed=true), if got_plain is false the scanner returns false instead of TOKEN(TOKEN_CONTENT_PLAIN). Fix e6b02d1 added this guard. A similar guard existed for double-linefeed (lines 306-314) from the earlier commit 5b58319.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "zero-width-data-section-loop"
+        ]
+      ],
+      "refs": [
+        "src/scanner.c:306-329",
+        "git:fix: don't loop forever on broken intseqs"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "zero-width-data-section-loop",
+      "claim": "An empty =begin/=end block (no content between the two delimiters) would cause an infinite loop because TOKEN_DATA_SECTION could be emitted zero-width on every scan call.",
+      "body": "scanner.c lines 169-173: did_zw_data flag in LexerState guards against re-emitting a zero-width TOKEN_DATA_SECTION. If got_content is false when =end is found, did_zw_data is set to 1; the next scan call checks and clears it, returning false instead of emitting again. Commit c4f8662 added this.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/scanner.c:53-57",
+        "src/scanner.c:169-173",
+        "git:fix: guard against zero-width data section token loops"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "data-section-checked-before-start-command",
+      "claim": "TOKEN_DATA_SECTION must be checked before TOKEN_START_COMMAND in the scanner because inside a begin_paragraph the grammar expects _data_section first, and '=end' at column 0 would otherwise be consumed as a new command paragraph.",
+      "body": "scanner.c line 163 comment: 'Must be checked before TOKEN_START_COMMAND since the parser expects _data_section first inside begin_paragraph.' The scanner branch for TOKEN_DATA_SECTION appears at line 169, before the TOKEN_START_COMMAND branch at line 223.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/scanner.c:162-169",
+        "src/scanner.c:223"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "escape-sequence-distinct-node",
+      "claim": "E<...> is parsed as a distinct escape_sequence node (not interior_sequence) because its content is a plain entity name or number, not nested POD markup.",
+      "body": "grammar.js lines 81-87: escape_sequence uses _escape_content = repeat1(_content_plain), so the scanner never emits INTSEQ_LETTER inside an E<...>. The grammar comment explains: 'The content is a repeat1 of plain tokens so that the scanner always sees TOKEN_CONTENT_PLAIN co-valid with TOKEN_INTSEQ_END'. This landed in v1.1.0 (commit d4e6745, 2026-05-31).",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S6",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [
+        [
+          "supersedes",
+          "escape-treated-as-generic-intseq"
+        ]
+      ],
+      "refs": [
+        "grammar.js:77-87",
+        "src/scanner.c:291-294",
+        "git:feat: parse E<...> as a distinct escape_sequence node"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "escape-treated-as-generic-intseq",
+      "claim": "Before v1.1.0, E<lt> was parsed as a generic interior_sequence with content that could contain nested markup, which was incorrect because E<...> content is always a plain entity reference.",
+      "body": "Prior to commit d4e6745 there was no escape_sequence rule. The scanner had no TOKEN_INTSEQ_ESCAPE_LETTER. The valid_time closes 2026-05-30 just before the fix landed.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.7,
+      "asserted": 0.78,
+      "valid_time": [
+        "2023-01-17",
+        "2026-05-30"
+      ],
+      "edges": [],
+      "refs": [
+        "git:feat: parse E<...> as a distinct escape_sequence node"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "over-item-back-flat",
+      "claim": "=over/=item/=back are NOT nested into a list sub-tree; they appear as sibling command_paragraph nodes at the top level of the pod tree.",
+      "body": "Commit 4b7f3ba (2023-01-18) removed the nested list structure 'because it might be intentionally split across multiple sections when embedded in a Perl file'. The test in test/corpus/commands shows =over/=item/=back as flat command_paragraph children of pod.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "test/corpus/commands:28-50",
+        "git:Don't attempt to nest over/item/back in a sub-tree"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "plain-para-tolerates-missing-blank-line",
+      "claim": "The scanner intentionally allows a =cmd directive to follow a plain paragraph without an intervening blank line, even though the POD spec requires one.",
+      "body": "scanner.c lines 321-329 comment: 'Technically there should be a blank line before the next command. But so many people omit it. We'll allow this here'. The scanner stops TOKEN_CONTENT_PLAIN when it sees '=' at the start of a line following a single newline.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/scanner.c:320-329"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-cut-is-soft-stop",
+      "claim": "=cut probably causes the parser to stop consuming POD nodes when embedded in a Perl source file, but the grammar comment says 'we don't really stop at =cut'.",
+      "body": "grammar.js line 26 comment: 'We don't really stop at a =cut but it's handy for highlighting purposes'. Whether the embedding host (tree-sitter-perl) respects =cut as a real boundary is unclear from this repo alone.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 6,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.5,
+      "asserted": 0.55,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "grammar.js:26-27"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-end-command-peek-destructive",
+      "claim": "at_end_command() peeks forward using lexer->advance without calling mark_end first, which means the consumed characters are not rolled back; callers must have already called mark_end if they care about the token boundary.",
+      "body": "scanner.c lines 117-130: at_end_command calls lexer->advance multiple times with no mark_end inside it. The caller at line 184 calls mark_end before invoking at_end_command, so position is preserved for the data token. But at_end_command's own advances effectively discard those characters from the result if TOKEN_DATA_SECTION is then emitted at the earlier mark.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 5,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.5,
+      "asserted": 0.6,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/scanner.c:114-130",
+        "src/scanner.c:183-189"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-chevron-stack-overflow-implied-one",
+      "claim": "Nesting interior sequences beyond 8 levels is silently mishandled: chevron_count_top returns 1 (not the actual opening count) for depth >= MAX_NESTED_CHEVRONS.",
+      "body": "scanner.c lines 102-107: chevron_count_top returns 1 if nchevrons >= MAX_NESTED_CHEVRONS. A sequence opened with C<<<< (4 chevrons) at depth 9 would be closed by a single '>' rather than 4 '>', silently producing wrong parse. This is an intentional simplification given the rarity of such nesting.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.52,
+      "asserted": 0.6,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/scanner.c:51-57",
+        "src/scanner.c:102-107"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "reducer-zero-width-guard-pattern",
+      "claim": "This scanner uses a recurring pattern to prevent infinite loops: whenever it might emit a zero-width token, it either returns false or sets a guard flag (did_zw_data) to refuse the second emission.",
+      "body": "Three separate fixes address the same class of bug: 5b58319 (double-linefeed zero-width), e6b02d1 (single-linefeed before '='), c4f8662 (zero-width data section). Each applies the same guard: check a boolean condition before emitting, return false if no content. [[zero-width-plain-loop]] and [[zero-width-data-section-loop]] document two instances.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-sonnet",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 6,
+      "directness": "reduced",
+      "obs": 3,
+      "weight": 0.92,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "zero-width-plain-loop"
+        ],
+        [
+          "derived_from",
+          "zero-width-data-section-loop"
+        ],
+        [
+          "derived_from",
+          "verbatim-no-intseq"
+        ]
+      ],
+      "refs": [
+        "src/scanner.c:169-173",
+        "src/scanner.c:306-329",
+        "git:Don't confuse tree-sitter by emitting a zero-length token"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "r3-indented-block-original",
+      "claim": "=over/=item/=back can be structured as a nested indented_block sub-tree in the grammar",
+      "body": "The original grammar (commit 356d342, 2023-01-17) modeled `=over ... =item ... =back` as a single `indented_block` rule that required all three directives to appear in sequence within a single sub-tree. This reflected the POD spec's notion of indented list blocks as balanced, self-contained structures. At write time, commit 356d342 adds `indented_block: $ => seq($.over_paragraph, repeat(choice($.item_paragraph, ...)), $.back_paragraph)` as the grammar's list representation.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-VoV",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": 0.8,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "grammar.js:14",
+        "git:356d3421134aa7942eff1da1ed2758a6cca1146c"
+      ]
+    },
+    {
+      "slug": "r3-indented-block-verdict1",
+      "claim": "Nesting =over/=item/=back in an indented_block sub-tree is the correct grammar structure",
+      "body": "Commit 356d342 (2023-01-17) establishes `indented_block` as the grammar rule for list content: `indented_block: $ => seq($.over_paragraph, repeat(choice($.item_paragraph, $.plain_paragraph, $.verbatim_paragraph, $._blank_line)), $.back_paragraph)`. This verdict claims that balanced nesting is both structurally correct and sufficient for POD. Attacks the flat-listing assumption in [[r3-indented-block-original]] by replacing it with an explicit tree structure.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "R3-VoV",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.7,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-indented-block-original"
+        ],
+        [
+          "attacks",
+          "r3-indented-block-original"
+        ]
+      ],
+      "refs": [
+        "grammar.js:17",
+        "git:356d3421134aa7942eff1da1ed2758a6cca1146c"
+      ]
+    },
+    {
+      "slug": "r3-indented-block-verdict2",
+      "claim": "Nesting =over/=item/=back in a sub-tree is wrong because POD can split these directives across sections when embedded in a Perl file",
+      "body": "Commit 4b7f3ba (2023-01-18, just ~27 hours after 356d342) removes `indented_block` entirely. The commit message explicitly states: 'Don't attempt to nest over/item/back in a sub-tree because it might be intentionally split across multiple sections when embedded in a Perl file.' The fix replaces the nested rule with three flat sibling rules: `over_paragraph`, `item_paragraph`, `back_paragraph` at the top-level `pod: $ => repeat(choice(...))`. This defeats [[r3-indented-block-verdict1]] because the balanced-tree assumption breaks when POD is embedded piecemeal in Perl source. The flat structure has remained unchanged through 12 subsequent grammar.js commits.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "R3-VoV",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-indented-block-verdict1"
+        ],
+        [
+          "attacks",
+          "r3-indented-block-verdict1"
+        ]
+      ],
+      "refs": [
+        "grammar.js:16",
+        "git:4b7f3ba55befbd86f1dc5baa674b746429a78944"
+      ]
+    },
+    {
+      "slug": "r3-blank-line-spec",
+      "claim": "Per the POD specification, a blank line is required before a command paragraph (=head1, =over, etc.) that follows a plain paragraph",
+      "body": "The POD spec (perlpod) states that command paragraphs must be preceded by a blank line to separate them from the preceding paragraph. The scanner comment at src/scanner.c:322 directly acknowledges this spec requirement: '/* Technically there should be a blank line before the next command.' This is the spec-side of the tension: strict POD requires the blank line separator, and a compliant parser would not permit its omission.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "src/scanner.c:322"
+      ]
+    },
+    {
+      "slug": "r3-blank-line-lax",
+      "claim": "The scanner deliberately accepts commands that are not preceded by a blank line because so many real-world POD documents omit the blank line",
+      "body": "The scanner comment at src/scanner.c:322-323 directly surfaces the conflict: '/* Technically there should be a blank line before the next command. * But so many people omit it. We'll allow this here */'. The code then falls through to `TOKEN(TOKEN_CONTENT_PLAIN)` and ends the current plain paragraph when it sees a line beginning with `=` even without a preceding blank line. This contradicts [[r3-blank-line-spec]] and is un-adjudicated: no later commit has resolved the tension or chosen one side; the lax behavior coexists with the acknowledged spec violation in an open comment. There is no bug report closed or issue resolved that changes this behavior.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-CONFLICT",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.7,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "attacks",
+          "r3-blank-line-spec"
+        ]
+      ],
+      "refs": [
+        "src/scanner.c:321",
+        "src/scanner.c:322",
+        "src/scanner.c:323"
+      ]
+    },
+    {
+      "slug": "r3-external-scanner-design",
+      "claim": "POD parsing requires an external scanner (not pure grammar rules) for line-level disambiguation of paragraph types",
+      "body": "Inferred at commit e9db194 (2023-01-17): the very first version of src/scanner.c introduced an external scanner with `TOKEN_EOL`, `TOKEN_START_DIRECTIVE`, and `TOKEN_START_PLAIN`. At write time, this was inferable from the structure of POD itself: paragraph types (plain, verbatim, command) are distinguished by column-zero content and cannot be disambiguated by tree-sitter's purely context-free grammar rules — verbatim paragraphs are identified by indentation, commands by `=` at column 0, and plain paragraphs by the absence of both. The external scanner approach is the only way to encode these positional constraints. This decision has survived all 68 subsequent commits; the external scanner remains the core parsing architecture as of the current HEAD (src/scanner.c still implements the full external scanner API). Mechanically checkable: `grep -c 'tree_sitter_pod_external_scanner_scan' src/scanner.c` returns 1.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": [
+        "2023-01-17",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "src/scanner.c:132",
+        "git:e9db1946f771b4571bbd1646501165bcd02c389c"
+      ]
+    },
+    {
+      "slug": "r3-content-repeat1",
+      "claim": "The `_content` rule uses `repeat1` (not `repeat`) to guarantee at least one content token; empty content is structurally absent, not an empty node",
+      "body": "Inferred at commit 2f83f42 (2023-01-17): the initial content rule `_content: $ => repeat1(choice($._content_plain, $.interior_sequence))` uses `repeat1` from the start. At write time this was inferable from the grammar semantics: a `content` node with zero children would be structurally identical to its absence, causing ambiguity; `repeat1` forces the grammar to represent 'no content' by omitting the node entirely (grammar uses `optional($.content)`) rather than emitting an empty one. This design has survived through 12 grammar.js commits including the addition of `escape_sequence` as a third alternative (d4e6745); the `repeat1` invariant was preserved and extended: `_content: $ => repeat1(choice($._content_plain, $.interior_sequence, $.escape_sequence))`. Mechanically checkable: `grep '_content.*repeat1' grammar.js` returns the rule with `repeat1`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.68,
+      "valid_time": [
+        "2023-01-17",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "grammar.js:66",
+        "git:2f83f4266f797d504c13c3ef20ffd88f1c438a78"
+      ]
+    },
+    {
+      "slug": "r3-max-nested-chevrons-8",
+      "claim": "The maximum tracked nesting depth for multiple-chevron interior sequences is exactly 8, stored as a fixed-size stack in LexerState",
+      "body": "Inferred at commit ca68828 (2023-03-03): `#define MAX_NESTED_CHEVRONS 8` with `unsigned char chevron_count[MAX_NESTED_CHEVRONS]` introduced the multiple-chevron stack. At write time this was inferable as a reasonable upper bound: POD sequences with `<<`, `<<<`, etc. are rare in practice and more than 8 levels of distinct chevron depths in a single document would be pathological. The comment in the struct confirms the design: 'stores at most MAX count; always the true number, further are implied =1 if beyond MAX' — graceful degradation for overflow. The value 8 has never been changed across the 5 subsequent scanner.c commits (d4e6745, c4f8662, 11f0bca, 6902fce, fff3b6a). Mechanically checkable: `grep 'MAX_NESTED_CHEVRONS' src/scanner.c | head -1` returns `#define MAX_NESTED_CHEVRONS 8`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.58,
+      "asserted": 0.63,
+      "valid_time": [
+        "2023-03-03",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "src/scanner.c:51",
+        "src/scanner.c:54",
+        "git:ca6882882ec43e05b4def2cac42392c7f34a6841"
+      ]
+    }
+  ]
+}

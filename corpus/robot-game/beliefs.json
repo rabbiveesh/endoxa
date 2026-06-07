@@ -1,0 +1,1447 @@
+{
+  "title": "Robot Buddy Adventure",
+  "blurb": "A Zelda-style math education RPG for kids ages 4-10 where math IS the gameplay — not a pop quiz interrupting it — built in pure Rust with macroquad.",
+  "subject_repo": "/home/veesh/personal/robot-game",
+  "sessions": {
+    "S1": [
+      "s1-init",
+      "2026-03-24",
+      "Initial JS prototype: tile game + math/phonics challenges"
+    ],
+    "S2": [
+      "s2-adaptive",
+      "2026-03-25",
+      "Adaptive learning spec + architecture decisions, drop phonics"
+    ],
+    "S3": [
+      "s3-rustwasm",
+      "2026-03-29",
+      "Rust domain port + Rust+WASM hybrid bridge"
+    ],
+    "S4": [
+      "s4-macroquad",
+      "2026-04-26",
+      "Full macroquad migration: delete all JS, headless e2e harness"
+    ],
+    "S5": [
+      "s5-npcs",
+      "2026-05-05",
+      "Wandering NPCs, collision resolver, pushable entities"
+    ],
+    "S6": [
+      "s6-worldrefactor",
+      "2026-06-01",
+      "Map refactor spikes: MapId enum, ASCII grids, MapDef trait"
+    ],
+    "ADV": [
+      "adversarial-haiku-2026-06-04",
+      "2026-06-04",
+      "adversarial harvest: underpowered model (no tools) on tricky snippets, verified vs code"
+    ],
+    "R3-HINTS": [
+      "r3-hints-session",
+      "2026-06-04",
+      "Hint/teaching system add→disable→re-add chain"
+    ],
+    "R3-SEEDS": [
+      "r3-seeds-session",
+      "2026-06-04",
+      "Hand-picked test seed stability tension"
+    ],
+    "R3-SURVIVORS": [
+      "r3-survivors-session",
+      "2026-06-04",
+      "Early inferred assumptions that survived 100+ commits"
+    ]
+  },
+  "beliefs": [
+    {
+      "slug": "binary-name",
+      "claim": "The WASM binary is named robot-buddy-game.wasm.",
+      "body": "build-wasm.sh copies `target/wasm32-unknown-unknown/release/robot-buddy-game.wasm` to `robot-buddy-game/www/`. The Cargo workspace member is `robot-buddy-game`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "build-wasm.sh:16",
+        "Cargo.toml:2"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "storage-key",
+      "claim": "Save data is stored in browser localStorage under the key `robotBuddySaves`.",
+      "body": "The constant `STORAGE_KEY = \"robotBuddySaves\"` is defined in save.rs. All three save slots are serialized into a single JSON array under this key.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.68,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "robot-buddy-game/src/save.rs:100"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "three-save-slots",
+      "claim": "The game has exactly 3 save slots, typed as `[Option<SaveData>; 3]`.",
+      "body": "The type alias `SaveSlots = [Option<SaveData>; 3]` is defined in save.rs. LocalStorageBackend serializes/deserializes this fixed-size array.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "robot-buddy-game/src/save.rs:103"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "ci-github-actions",
+      "claim": "CI runs on GitHub Actions: `cargo test`, WASM build, and deploy to GitHub Pages. No Node, no npm in CI.",
+      "body": "The workflow at .github/workflows/*.yml uses `dtolnay/rust-toolchain@stable` with `wasm32-unknown-unknown`, runs `cargo test`, then `./build-wasm.sh`, and deploys the assembled `_site/` directory to GitHub Pages.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.58,
+      "asserted": 0.63,
+      "valid_time": [
+        "2026-03-24",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        ".github/workflows/deploy.yml:1-50",
+        "CLAUDE.md:41"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "entry-point-main-rs",
+      "claim": "The game entry point is `robot-buddy-game/src/main.rs`, a thin macroquad shim that captures `FrameInput`, calls `Game::step`, then `Game::render`, and awaits `next_frame`.",
+      "body": "main.rs is 29 lines: it seeds the RNG from `macroquad::rand::rand()`, constructs `Game::new(seed)`, then loops `FrameInput::capture → step → render → next_frame`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.7,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-game/src/main.rs:1-29"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "workspace-two-crates",
+      "claim": "The Cargo workspace has exactly two members: `robot-buddy-domain` (pure Rust library) and `robot-buddy-game` (macroquad binary).",
+      "body": "Cargo.toml at the workspace root lists `members = [\"robot-buddy-domain\", \"robot-buddy-game\"]`. Domain has no macroquad dependency; game depends on domain.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.72,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "Cargo.toml:1-2"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "project-scope-v1-js-prototype",
+      "claim": "From project inception through 2026-03-28, the game was a vanilla-JS prototype: flat file structure, global mutable state, math plus phonics challenges, no build step.",
+      "body": "Initial commit 7ae7e74 describes 'math & phonics RPG'. Phonics was removed in commit 2fea4e1 on 2026-03-26. The JS prototype ran directly in the browser with no bundler.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S1",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": [
+        "2026-03-24",
+        "2026-03-29"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Robot Buddy Adventure — math & phonics RPG for kids",
+        "git:Remove phonics entirely — wrong medium for this"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "project-scope-v2-rust-wasm-hybrid",
+      "claim": "From 2026-03-29 through 2026-04-25, the project was a Rust+WASM hybrid: domain logic in Rust compiled to WASM, presentation still in JS via an adapter bridge.",
+      "body": "Commit b38c635 began porting domain to Rust on 2026-03-29. Commit c693786 deleted the JS domain. The adapter.js bridge serialized events as JSON across the WASM boundary. This phase ended when macroquad migration (ac48738) deleted all JS on 2026-04-26.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": [
+        "2026-03-29",
+        "2026-04-26"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "project-scope-v1-js-prototype"
+        ]
+      ],
+      "refs": [
+        "git:Begin Rust+WASM migration — rolling_window and operation_stats",
+        "git:Delete JS domain — Rust+WASM is the only domain now"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "project-scope-v3-pure-rust",
+      "claim": "From 2026-04-26 onward, the project is pure Rust: domain crate + macroquad game crate, single WASM binary, no JS, no adapter, no JSON boundary at runtime.",
+      "body": "Commit ac48738 ('Macroquad migration: rewrite presentation in Rust, delete all JS') landed on 2026-04-26. CLAUDE.md confirms 'One language: Rust'. The build produces one .wasm file served with macroquad's mq_js_bundle.js loader.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supersedes",
+          "project-scope-v2-rust-wasm-hybrid"
+        ]
+      ],
+      "refs": [
+        "git:Macroquad migration: rewrite presentation in Rust, delete all JS (#15)",
+        "CLAUDE.md:37"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "phonics-then-removed",
+      "claim": "Phonics challenges existed from day 1 of the project but were removed entirely on 2026-03-26 because text was deemed the wrong medium for that skill.",
+      "body": "Initial commit title reads 'math & phonics RPG'. Commit 2fea4e1 removed all phonics challenges, word lists, phonics HUD badge, and the phonics option from the title screen. Commit message: 'wrong medium for this'. Backward-compatible: old saves with phonics data load fine.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "git:Robot Buddy Adventure — math & phonics RPG for kids",
+        "git:Remove phonics entirely — wrong medium for this"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "band-blending-adr",
+      "claim": "Band progression uses a weighted probability distribution (ADR-001), not hard levels. `math_band` is a center of a bell-curve spread, not a wall.",
+      "body": "ADR-001 describes three problems with hard bands (cliffs, oscillation, floor traps) and replaces them with `band_distribution(center_band, spread_width)`. Accuracy-based promotion (75% at center + 60% on stretch, min 4 attempts) replaces streak-based. Streak is display-only since this change.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.93,
+      "valid_time": [
+        "2026-03-26",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supports",
+          "streak-display-only"
+        ]
+      ],
+      "refs": [
+        "docs/adr/001-band-blending.md:1-40",
+        "robot-buddy-domain/src/learning/challenge_generator.rs:9-54"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "streak-display-only",
+      "claim": "The `streak` field in `LearnerProfile` is display-only — it has zero mechanical effect on band promotion or demotion.",
+      "body": "Streak is updated in the reducer (increments on correct, decrements on wrong, resets on promotion/demotion/frustration) but the `should_promote` and `should_demote` functions never read it. ADR-001 explicitly states: 'Streak is display-only.'",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": [
+        "2026-03-26",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "derived_from",
+          "band-blending-adr"
+        ],
+        [
+          "supports",
+          "promote-needs-4-attempts"
+        ]
+      ],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:200-225",
+        "docs/adr/001-band-blending.md:1-40"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "promote-needs-4-attempts",
+      "claim": "Band promotion requires at least 4 attempts at the center band in the rolling window, not just hitting the accuracy threshold.",
+      "body": "`should_promote` returns false when `at_count < 4`. Similarly `should_demote` requires `at_count >= 4`. This prevents premature promotion/demotion on sparse data.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:141-154"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "cra-per-operation",
+      "claim": "CRA stage (Concrete/Representational/Abstract) is tracked independently per `Operation`, so a child can be Abstract for addition but still Concrete for division.",
+      "body": "LearnerProfile stores `cra_stages: HashMap<Operation, CraStage>`. New profiles initialize all 5 operations (Add, Sub, Multiply, Divide, NumberBond) to Concrete. The reducer advances each operation's CRA independently.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:24",
+        "robot-buddy-domain/src/learning/learner_profile.rs:44-47"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "cra-promotes-after-3-consecutive",
+      "claim": "CRA stage advances after 3 consecutive no-hint, no-told-me correct answers at the same CRA stage for the same operation.",
+      "body": "`count_consecutive_no_hint_correct` iterates the window in reverse and breaks on any other operation, on a wrong answer, on hint_used, told_me, or a different cra_level_shown. Promotion fires at count >= 3.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.87,
+      "asserted": 0.88,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "cra-per-operation"
+        ]
+      ],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:156-167",
+        "robot-buddy-domain/src/learning/learner_profile.rs:259-265"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "rolling-window-size-20",
+      "claim": "The `RollingWindow` is fixed at `max_size = 20` entries for a new `LearnerProfile`.",
+      "body": "`LearnerProfile::new()` calls `RollingWindow::new(20)`. The window is immutable — `push` returns a new `RollingWindow`, dropping the oldest entry when size exceeds `max_size`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.87,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:65",
+        "robot-buddy-domain/src/learning/rolling_window.rs:53-63"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "frustration-high-on-3-consecutive-wrong",
+      "claim": "Three or more consecutive wrong answers triggers `FrustrationLevel::High` with a `drop_band` recommendation, regardless of overall accuracy.",
+      "body": "`detect_frustration` checks `window.consecutive_wrong() >= 3` first, before any accuracy check. This is intentional priority: consecutive failures signal acute distress distinct from poor rolling accuracy.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/learning/frustration_detector.rs:22-28"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "frustration-high-drops-band",
+      "claim": "A `FrustrationDetected { level: \"high\" }` event handled by `learner_reducer` drops `math_band` by 1, sets `wrongs_before_teach` to 1, reduces pace by 0.2, and tightens `spread_width`.",
+      "body": "The reducer matches `FrustrationDetected { level }` and if level == \"high\" returns a new profile with band-1, wrongs_before_teach:1, pace-0.2, spread_width-0.15 (floored at 0.1). Non-high levels return state unchanged.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "supports",
+          "frustration-high-on-3-consecutive-wrong"
+        ]
+      ],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:311-322"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "no-timer-on-challenges",
+      "claim": "Children never see a countdown timer on math challenges. Response time is measured silently for the adaptive system but never displayed.",
+      "body": "CLAUDE.md architecture invariant #4: 'The game must never time-pressure a child. No countdown timers on challenges, ever. We measure response time silently for the adaptive system, but the child never sees a clock.' `response_time_ms` is an optional field in `WindowEntry` and `PuzzleAttempted` event.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.92,
+      "asserted": 0.93,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "CLAUDE.md:27-29",
+        "robot-buddy-domain/src/learning/rolling_window.rs:7-26"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "no-labels-shown-to-kids",
+      "claim": "The child never sees labels like 'Easy', 'Band 3', or skill levels. The adaptive system is invisible to children; only the parent dashboard exposes it.",
+      "body": "CLAUDE.md architecture invariant #6: 'No labels shown to kids. The child never sees Easy, Band 3, skill levels, or any indication they're being assessed.' This is a hard design constraint, not a preference.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.92,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "CLAUDE.md:33-35"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "wrong-answers-natural-consequence",
+      "claim": "Wrong answers produce natural in-game consequences (Sparky's battery drains, door doesn't open) — never a red X or the word 'WRONG!'.",
+      "body": "CLAUDE.md invariant #7: 'Fail gracefully. Wrong answers have natural in-game consequences... Never a red X, never WRONG!, never punishment.' This aligns with the Broccoli Test (invariant #5).",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.91,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "CLAUDE.md:31-32"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "all-randomness-seeded",
+      "claim": "All randomness in domain functions is seeded. Domain functions take `&mut impl Rng`; tests use `SmallRng::seed_from_u64(42)`. There is no global RNG state.",
+      "body": "CLAUDE.md invariant #3. In main.rs, `let seed = macroquad::rand::rand() as u64` seeds `Game::new(seed)`. `generate_challenge` and `band_distribution` sampling both accept an explicit `&mut impl Rng`.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.91,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "CLAUDE.md:26",
+        "robot-buddy-game/src/main.rs:17",
+        "robot-buddy-domain/src/learning/challenge_generator.rs:56-66"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "save-backend-trait",
+      "claim": "Save persistence is abstracted behind a `SaveBackend` trait with two implementations: `LocalStorageBackend` (browser localStorage in WASM, /tmp files in native) and `InMemoryBackend` for tests.",
+      "body": "ADR-002 introduced `SaveBackend` in commit 5045e75. `InMemoryBackend` uses `RefCell<SaveSlots>` for isolated per-test storage. `LocalStorageBackend` dispatches to extern C localStorage functions on WASM or `/tmp/{key}.json` on native.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-game/src/save.rs:111-118",
+        "robot-buddy-game/src/save.rs:167-187"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "old-op-stats-was-flat",
+      "claim": "An agent working on the Rust+WASM bridge incorrectly assumed `OperationStats` could be serialized as a flat map using `#[serde(flatten)]`.",
+      "body": "Before the fix in commit 788f6a2, the Rust struct used `#[serde(flatten)]` attempting to merge coarse and fine into one map. Two different enum-keyed HashMaps cannot round-trip via serde flatten, so serialization was silently broken.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "git:Fix OperationStats shape + maxSize + expand boundary tests to 24"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "op-stats-nested-coarse-fine",
+      "claim": "The correct `OperationStats` serialization shape is `{ coarse: { add: {...}, ... }, fine: { add_single: {...}, ... } }` — a nested struct, not a flat map.",
+      "body": "Commit 788f6a2 ('Fix OperationStats shape') established the nested shape. JS adapter reads `profileState.operationStats.coarse.add`. The Rust struct has `coarse: HashMap<Operation, StatEntry>` and `fine: HashMap<SubSkill, StatEntry>` as separate fields.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S3",
+      "turn": 5,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.95,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "old-op-stats-was-flat"
+        ],
+        [
+          "attacks",
+          "old-op-stats-was-flat"
+        ]
+      ],
+      "refs": [
+        "git:Fix OperationStats shape + maxSize + expand boundary tests to 24",
+        "robot-buddy-domain/src/learning/operation_stats.rs:41-45"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "voice-answers-bypassed-reducer",
+      "claim": "An agent initially implemented voice answer submission by calling `recordResult` directly, bypassing the adapter's reducer and making voice practice invisible to the adaptive system.",
+      "body": "Commit 5e9acc0 ('Fix voice input: route through adapter reducer') describes exactly this bug: 'Voice answers were calling recordResult directly, bypassing the adapter's reducer.' The fix exposed `window._submitVoiceAnswer` through the adapter.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "git:Fix voice input: route through adapter reducer + add confirmation tier"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "voice-answers-must-go-through-adapter",
+      "claim": "Voice answer submission must go through the adapter reducer (`_submitVoiceAnswer`), not `recordResult` directly, so the adaptive system sees voice attempts as enriched events.",
+      "body": "Commit 5e9acc0 established this rule after the bypass bug was found. The fix also added a three-tier confidence system: >0.8 auto-submit, 0.5-0.8 confirmation prompt, <0.5 retry.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S3",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.93,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "voice-answers-bypassed-reducer"
+        ],
+        [
+          "attacks",
+          "voice-answers-bypassed-reducer"
+        ]
+      ],
+      "refs": [
+        "git:Fix voice input: route through adapter reducer + add confirmation tier"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "race-condition-portal-entry",
+      "claim": "The JS prototype had a race condition on secret area entry: `GAME.state` was only set to `DIALOGUE` inside a 300ms `setTimeout`, leaving a window where the player could move and exit the map before the speech box appeared.",
+      "body": "Commit 53fca25 ('Fix race condition: lock movement immediately on secret area entry') fixes this by setting `GAME.state = DIALOGUE` immediately on portal entry, before the delay. The 300ms delay was for visual effect; the state lock was accidentally inside it.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S1",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.93,
+      "asserted": null,
+      "valid_time": [
+        "2026-03-24",
+        "2026-03-29"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Fix race condition: lock movement immediately on secret area entry"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "blob-url-leak-on-rapid-advance",
+      "claim": "In the JS prototype, ElevenLabs audio blob URLs were only revoked in `onended`, not when audio was interrupted by rapid dialogue advancement, causing a memory leak over long sessions.",
+      "body": "Commit 1187800 ('Fix ElevenLabs blob URL leak on rapid dialogue advancement') fixed this by revoking the blob URL immediately on cleanup (pause + revoke) rather than waiting for natural playback end. This was a production bug on the deployed JS version.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "S1",
+      "turn": 4,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": null,
+      "valid_time": [
+        "2026-03-24",
+        "2026-04-26"
+      ],
+      "edges": [],
+      "refs": [
+        "git:Fix ElevenLabs blob URL leak on rapid dialogue advancement"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "move-resolver-intent-order-priority",
+      "claim": "The `resolve_moves` function gives priority to the first intent when two entities target the same tile. The caller should pass intents in (Player, Sparky, NPCs) order so the player has frame-priority.",
+      "body": "movement.rs comment: 'Order of intents matters: when two intents target the same tile, the one processed first wins and the later one is Blocked against it.' The `reserved` HashSet implements this: once a tile is reserved by a granted move, later intents into that tile are blocked.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.88,
+      "asserted": 0.9,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/world/movement.rs:113-117",
+        "robot-buddy-domain/src/world/movement.rs:148-155"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "pushable-mid-step-blocks",
+      "claim": "A pushable NPC that is mid-step (moving_to is Some) cannot be pushed even when pressure threshold is met. The pusher is blocked until the pushee settles.",
+      "body": "`try_push` checks `if pushee_state.moving_to.is_some() { return false; }`. The comment says 'Mid-step pushees: their tile bookkeeping makes a clean push ambiguous. Wait until they settle.' This is a deliberate simplification — no chain pushes either.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.88,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/world/movement.rs:275-277"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "push-results-order",
+      "claim": "When a push succeeds, the pushee's `Granted` resolution is appended to `resolutions` BEFORE the pusher's `Granted`. The pushee's own `Stay` intent later collapses to `Stayed`.",
+      "body": "In `resolve_moves`, `try_push` appends the pushee's Granted directly to `resolutions`, then `pushed_this_frame.insert(other_id)` prevents re-processing. When the pushee's own intent arrives, the `pushed_this_frame.contains(id)` guard makes it `Stayed`. The test `pushable_grants_pushee_and_pusher_when_destination_is_free` asserts `r.len() == 3` in the order [pushee Granted, pusher Granted, pushee Stayed].",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.85,
+      "asserted": 0.87,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "supports",
+          "pushable-mid-step-blocks"
+        ]
+      ],
+      "refs": [
+        "robot-buddy-domain/src/world/movement.rs:220-231",
+        "robot-buddy-domain/src/world/movement.rs:480-488"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "follower-phases-through-entities",
+      "claim": "Player followers (Sparky, companion NPC) have `phase_through_entities: true`, letting them retrace the player's path through wandering NPCs without getting wedged. Walls still block them.",
+      "body": "EntityState.phase_through_entities: 'lets a mover ignore other entities on the destination tile. Walls and out-of-bounds still block. Used for the player's followers so they can retrace the player's path without getting wedged behind a wandering NPC.' Tests confirm phasing movers are blocked by walls.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S5",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.87,
+      "asserted": 0.88,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/world/movement.rs:78-85",
+        "robot-buddy-domain/src/world/movement.rs:614-628"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "kenken-confidence-resets-on-promotion",
+      "claim": "When a child is promoted to a larger KenKen grid size, `logic_confidence` resets to 0.5 to keep difficulty fair at the new level.",
+      "body": "In `learner_reducer` for `KenKenAttempted`, after level promotion: `conf = 0.5; // reset on promotion to keep difficulty fair`. This mirrors the band-blending philosophy: promotion happens after demonstrated mastery, then the slate is partially wiped.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.82,
+      "asserted": 0.84,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:358-363"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "miniquad-pinned-commit",
+      "claim": "The workspace pins `miniquad` to a specific git commit (350cb91b6f13) that includes a macOS focus bug fix not yet in any tagged release, bypassing crates.io.",
+      "body": "Cargo.toml: `[patch.crates-io] miniquad = { git = '...', rev = '350cb91b6f13a1f369619c5024b563acef109d5f' }`. The comment explains the bug: app launches unfocused if mouse is moving at startup, clicks register inconsistently until alt-tab.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.8,
+      "asserted": 0.82,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "Cargo.toml:9-18"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "test-count-62-plus-7",
+      "claim": "The test suite has 62 domain unit tests and 7 game integration tests, running as plain `cargo test` with no window or browser.",
+      "body": "CLAUDE.md: 'Tests: cargo test runs 62 domain unit tests + 7 game integration tests (headless story-style — see ADR-002).' ADR-002 describes the Game::step/render split that enables headless testing.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.72,
+      "asserted": 0.75,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "CLAUDE.md:39"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-legacy-js-still-deployed",
+      "claim": "The vanilla-JS prototype is likely still deployed at rabbiveesh.github.io/robot-game even after the macroquad migration, since the CI workflow deploys from `main` and the migration is on a separate branch.",
+      "body": "CLAUDE.md states 'main branch: Vanilla-JS prototype (still deployed at https://rabbiveesh.github.io/robot-game/ until macroquad migration lands)'. The macroquad migration appears to be a branch, not yet merged to main. This is a hunch based on the branch naming in CLAUDE.md.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.5,
+      "asserted": 0.6,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "CLAUDE.md:7-8"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "hunch-save-migration-incomplete",
+      "claim": "The `migrate_legacy` method for saves might not handle all old field shapes — the `math_band` migration only runs if the saved band differs from 1, which would silently fail to upgrade a player who legitimately has math_band=1.",
+      "body": "save.rs: `if self.profile.math_band == 1 && band != 1 { self.profile.math_band = band; }` — if an old save had math_band:1 explicitly set and profile.math_band defaulted to 1, the migration would be a no-op even if needed. This is a low-confidence architectural hunch.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S4",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.45,
+      "asserted": 0.55,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "robot-buddy-game/src/save.rs:53-59"
+      ],
+      "scope": false
+    },
+    {
+      "slug": "reducer-consensus-immutable-domain",
+      "claim": "All game domain state is immutable and event-sourced: every change produces a new state value rather than mutating the old one. This is enforced by Rust ownership, not discipline.",
+      "body": "Converged from: [[all-randomness-seeded]], [[streak-display-only]], and [[rolling-window-size-20]]. Rust ownership means the old `LearnerProfile` is moved into `learner_reducer`; returning a new struct guarantees the old is gone. Tests verify immutability explicitly (`immutability` tests in rolling_window and operation_stats test modules).",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-sonnet",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S3",
+      "turn": 6,
+      "directness": "reduced",
+      "obs": 3,
+      "weight": 0.93,
+      "asserted": null,
+      "valid_time": [
+        "2026-03-25",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "derived_from",
+          "all-randomness-seeded"
+        ],
+        [
+          "derived_from",
+          "streak-display-only"
+        ],
+        [
+          "derived_from",
+          "rolling-window-size-20"
+        ]
+      ],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:177",
+        "robot-buddy-domain/src/learning/rolling_window.rs:242-247"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "reducer-consensus-adaptive-invisible",
+      "claim": "The adaptive learning system is architecturally invisible to the child: assessment happens through gameplay, difficulty adjusts silently, and nothing in the UI exposes bands, CRA stages, or frustration levels to the player.",
+      "body": "Converged from: [[no-labels-shown-to-kids]], [[no-timer-on-challenges]], and [[wrong-answers-natural-consequence]]. Three independent architectural invariants all point to the same design principle: stealth assessment. The parent dashboard is the only sanctioned visibility surface.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-sonnet",
+        "model": "claude-sonnet-4-6"
+      },
+      "session": "S2",
+      "turn": 5,
+      "directness": "reduced",
+      "obs": 3,
+      "weight": 0.92,
+      "asserted": null,
+      "valid_time": null,
+      "edges": [
+        [
+          "derived_from",
+          "no-labels-shown-to-kids"
+        ],
+        [
+          "derived_from",
+          "no-timer-on-challenges"
+        ],
+        [
+          "derived_from",
+          "wrong-answers-natural-consequence"
+        ]
+      ],
+      "refs": [
+        "CLAUDE.md:18-36"
+      ],
+      "scope": true
+    },
+    {
+      "slug": "haiku-boredom-needs-3-entries",
+      "claim": "is_boredom_wrong requires at least 3 entries in the window (two prior corrects plus the current wrong) before it can return true.",
+      "body": "HARVESTED from claude-haiku-4-5 (no tools), asserted 0.98 — its most confident claim on this repo.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-haiku-4-5",
+        "model": "claude-haiku-4-5"
+      },
+      "session": "ADV",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.4,
+      "asserted": 0.98,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:128-139"
+      ]
+    },
+    {
+      "slug": "boredom-min-2-entries",
+      "claim": "VERDICT: FALSE. The guard is `if entries.len() < 2 { return false; }`, so it proceeds with as few as 2 entries: prev1=entries[1], prev2=entries[0]. Two prior corrects is enough to return true; the minimum is 2, not 3.",
+      "body": "Defeats [[haiku-boredom-needs-3-entries]]. An off-by-one read of the length guard.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "ADV",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "haiku-boredom-needs-3-entries"
+        ],
+        [
+          "attacks",
+          "haiku-boredom-needs-3-entries"
+        ]
+      ],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:135-138"
+      ]
+    },
+    {
+      "slug": "haiku-resolve-yields-2",
+      "claim": "resolve_moves returns exactly 2 resolutions for the push scenario; the pushee's Stay intent is a no-op that adds no entry.",
+      "body": "HARVESTED from claude-haiku-4-5 (no tools), asserted ~0.94 (two related claims: count and 'no third entry').",
+      "author": {
+        "kind": "agent",
+        "id": "claude-haiku-4-5",
+        "model": "claude-haiku-4-5"
+      },
+      "session": "ADV",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.4,
+      "asserted": 0.94,
+      "valid_time": null,
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/world/movement.rs:220-248"
+      ]
+    },
+    {
+      "slug": "resolve-yields-3-stayed",
+      "claim": "VERDICT: FALSE. resolve_moves returns 3 resolutions — the test pushable_grants_pushee_and_pusher_when_destination_is_free asserts len==3. The pushed_this_frame check does NOT skip appending: it pushes MoveResolution::Stayed for the pushee's own intent and then continues, so a third entry r[2]=Stayed{Npc(1)} always appears.",
+      "body": "Defeats [[haiku-resolve-yields-2]]. 'No-op' meant no movement, not no output entry — the Stayed resolution is still pushed.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "ADV",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "haiku-resolve-yields-2"
+        ],
+        [
+          "attacks",
+          "haiku-resolve-yields-2"
+        ]
+      ],
+      "refs": [
+        "robot-buddy-domain/src/world/movement.rs:480-488"
+      ]
+    },
+    {
+      "slug": "r3-hints-original",
+      "claim": "Dot-counting visuals on 2-wrong trigger are sufficient to teach addition/subtraction at any band",
+      "body": "The initial commit (7ae7e74) introduced a `showTeaching` flag: after 2 wrong attempts the game displayed a `renderTeaching()` overlay using dot visuals and base-10 blocks, with a 'Let's figure it out together!' Sparky line. The state field `teachingData: { a, b, op, answer }` was populated by every math challenge. This assumed a single dot-based visual register would work across all difficulty bands.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "R3-HINTS",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.65,
+      "asserted": null,
+      "valid_time": [
+        "2026-03-24",
+        "2026-03-25"
+      ],
+      "edges": [],
+      "refs": [
+        "dialogue.js:33-34",
+        "dialogue.js:912",
+        "git:7ae7e742ec7c23f61fd6539d77d5d06d574314f2"
+      ]
+    },
+    {
+      "slug": "r3-hints-verdict1",
+      "claim": "Dot-counting hints are broken and must be disabled — they do not scale past band 3",
+      "body": "Commit abb4888 replaced the `showTeaching = true` branch with a comment: 'Hints/teaching disabled — current dot system doesn't scale past band 3. Will reintroduce with proper CRA-aware representations (tens bars, number lines, base-10 blocks) that actually help at higher bands.' The Sparky 'Let's figure it out together!' speakLine was deleted. The system now just marks the challenge answered-wrong and moves on. This verdict directly attacks [[r3-hints-original]].",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "R3-HINTS",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.7,
+      "asserted": 0.85,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-hints-original"
+        ],
+        [
+          "attacks",
+          "r3-hints-original"
+        ]
+      ],
+      "refs": [
+        "dialogue.js:756-770",
+        "git:abb4888bbd863842357ea47e2d9674c2412641f3"
+      ]
+    },
+    {
+      "slug": "r3-hints-verdict2",
+      "claim": "The disable of the hint system was itself wrong — the correct response was a proper CRA-aware re-implementation, not removal",
+      "body": "Commit 4660f40 added a full `renderTeachingPhase()` function to QuizRenderer — 70 lines with header, question, CRA-branching visuals (dots for bands 1-4, base-10 blocks for 5+), large green answer, and dismiss prompt. The commit message reads: 'Proper teaching phase renderer — no more legacy renderTeaching. QuizRenderer now has its own renderTeachingPhase function that reads from challengeState, not the dead CHALLENGE globals.' This explicitly revives the teaching behaviour disabled by [[r3-hints-verdict1]] using the CRA-aware approach the disable commit promised. The re-addition arrived 4 days after the disable, carrying the CRA stage-branching that the original lacked.",
+      "author": {
+        "kind": "human",
+        "id": "maintainer"
+      },
+      "session": "R3-HINTS",
+      "turn": 3,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.9,
+      "asserted": 0.9,
+      "valid_time": null,
+      "edges": [
+        [
+          "adjudicates",
+          "r3-hints-verdict1"
+        ],
+        [
+          "attacks",
+          "r3-hints-verdict1"
+        ]
+      ],
+      "refs": [
+        "src/presentation/renderers/quiz-renderer.js:5-74",
+        "git:4660f40c5a5103935d2e6d28d90847a68157df8b"
+      ]
+    },
+    {
+      "slug": "r3-seed-stable",
+      "claim": "Hand-picked integer seeds give story tests deterministic, readable, and fast determinism without extra infrastructure",
+      "body": "ADR-002 (commit 5045e75) resolved on using `Harness::new(seed: u64)` backed by `SmallRng::seed_from_u64`. Tests use specific seeds (0, 1, 7, 11, 42, etc.) that produce known gameplay paths: seed 0 makes talking to Sparky roll a challenge, seed 1 produces a wandering NPC in the push corridor, etc. The design note says: 'acceptable until many such tests exist'. Currently story.rs has 20+ test functions across those seeds. The simplicity is the upside being asserted.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-opus",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SEEDS",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.7,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-game/tests/common/mod.rs:32-34",
+        "robot-buddy-game/tests/story.rs:80-83",
+        "docs/adr/002-headless-test-harness.md:64",
+        "git:5045e750c1798cc44eeb634d09487a87be89e4fc"
+      ]
+    },
+    {
+      "slug": "r3-seed-fragile",
+      "claim": "Hand-picked seeds break silently if any rng.gen() call is re-ordered before the tested path, hanging tests in wait_until",
+      "body": "ADR-002 explicitly documents: 'Hand-picked seeds (e.g. seed 0 for \"talk rolls a challenge\") are fragile to RNG-flow changes. If we re-order any rng.gen() call before the talk path, the seed picks a different draw and the test hangs in wait_until.' The mitigation note says 'revisit by injecting a \"force challenge\" hook if it bites.' As of 2026-06-04 no such hook exists in the codebase (grep for force_challenge or challenge_hook returns nothing). story.rs line 80 explicitly warns: 'If the random behavior changes, find a new seed via a scratch test.' This attacks [[r3-seed-stable]]: the same simplicity that makes seeds appealing makes them invisible breakage vectors on refactor.",
+      "author": {
+        "kind": "reducer",
+        "id": "reducer-opus",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SEEDS",
+      "turn": 2,
+      "directness": "stated",
+      "obs": 1,
+      "weight": 0.75,
+      "asserted": 0.9,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [
+        [
+          "attacks",
+          "r3-seed-stable"
+        ]
+      ],
+      "refs": [
+        "docs/adr/002-headless-test-harness.md:64",
+        "robot-buddy-game/tests/story.rs:80-83",
+        "git:5045e750c1798cc44eeb634d09487a87be89e4fc"
+      ]
+    },
+    {
+      "slug": "r3-domain-pure",
+      "claim": "The domain crate is and will remain browser-agnostic: pure reducers, no IO, no macroquad, no extern C",
+      "body": "At write time (commit 454ee9f, 2026-03-25) the architecture spec locked in 'Immutable state + reducer pattern' and the rationale section noted event-log reprocessing and confounder resilience as reasons. The spec explicitly separated domain from presentation ('Domain unit tests are what matters'). This was inferable from the DDD layering decision (cb1183c) and the explicit choice to make the domain a pure Rust library crate. The constraint is structurally enforced: robot-buddy-domain/src/ has no #[cfg(target_arch = 'wasm32')] blocks, no macroquad imports, and no extern 'C' declarations. learner_reducer takes ownership and returns a new value. Survived through 150 commits including the Macroquad migration (ac48738, 2026-04-26) which deleted all JS but left the domain crate untouched.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 1,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.6,
+      "asserted": 0.65,
+      "valid_time": [
+        "2026-03-25",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "docs/architecture-spec.md",
+        "robot-buddy-domain/src/learning/learner_profile.rs:177",
+        "git:454ee9fddfe234cd8efa971b0dae67e967a0e8fb",
+        "git:ac487382bc87cca9b6b6ad34dad86716f5819947"
+      ]
+    },
+    {
+      "slug": "r3-band-blending",
+      "claim": "Difficulty is a weighted probability distribution centered on mathBand, not a hard level — the center is a magnet, not a wall",
+      "body": "Commit 0509efc (2026-03-26) implemented band blending. At write time this was inferable from the ADR-001 spec (a4c86ff, same day) which documented three observed problems with hard bands: cliffs, oscillation, and floor traps, all verified by CLI simulator QA. The design was inferred from the band-blending spec before and independently of the implementation: distribution center + spread_width dial was the natural solution to all three pathologies simultaneously. The assumption survived the complete Rust rewrite (ac48738, 2026-04-26) — challenge_generator.rs contains band_distribution() and sample_from_distribution(), LearnerProfile still has spread_width: f64, and should_promote() still gates on accuracy_at_band and accuracy_above_band. Checkable: grep spread_width in robot-buddy-domain/src/ returns >10 hits.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 2,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.62,
+      "asserted": 0.68,
+      "valid_time": [
+        "2026-03-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/learning/challenge_generator.rs:469",
+        "robot-buddy-domain/src/learning/learner_profile.rs:16",
+        "docs/adr/001-band-blending.md",
+        "git:0509efc947da68282e8b28236419c6d4a579f664"
+      ]
+    },
+    {
+      "slug": "r3-accuracy-promotion",
+      "claim": "Band promotion is accuracy-only; streak is a display counter with zero mechanical effect on promotion or demotion",
+      "body": "Commit 925262b (2026-03-26) removed streak-based promotion ('Kill streak-based promotion, accuracy-only with CRA ramp on stretch'). At write time this was inferable from ADR-001 which states 'Streak is display-only. Kids like seeing streaks, Sparky celebrates them, but streaks have zero mechanical effect on band progression.' The decision was justified by band blending eliminating the cliff problem that streaks were originally solving. Checkable in current Rust: learner_profile.rs lines 201-219 show streak updated for display but not read by should_promote() or should_demote(); the doc comment at line 201 says 'Streak (display only)'. Survived 125 commits from 925262b through 2026-06-04 with no regression.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 3,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.63,
+      "asserted": 0.7,
+      "valid_time": [
+        "2026-03-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-domain/src/learning/learner_profile.rs:201-225",
+        "docs/adr/001-band-blending.md:29",
+        "git:925262b23c4605ff69415a2517c8bb033829bda9"
+      ]
+    },
+    {
+      "slug": "r3-save-backend-no-crosstest",
+      "claim": "LocalStorageBackend and InMemoryBackend share no automated cross-implementation contract test, relying on behavioral simplicity instead",
+      "body": "ADR-002 (5045e75, 2026-04-26) documents: 'No automated cross-impl test today; the current behavior is simple enough that drift is unlikely.' At write time this was inferable from save.rs: both implementations handle slot >= 3 identically (skip/ignore), missing-slot returns None, and timestamp semantics diverge intentionally (InMemoryBackend always writes 0, LocalStorageBackend writes a real epoch). The gap is structurally present: SaveBackend trait has three methods, no blanket test exercises both impls against a shared spec. Survived 30+ commits since ADR-002 was written. Checkable: grep for cross-impl or backend parametrized test in robot-buddy-game/tests/ returns nothing.",
+      "author": {
+        "kind": "agent",
+        "id": "claude-opus-4-8",
+        "model": "claude-opus-4-8"
+      },
+      "session": "R3-SURVIVORS",
+      "turn": 4,
+      "directness": "inferred",
+      "obs": 1,
+      "weight": 0.55,
+      "asserted": 0.6,
+      "valid_time": [
+        "2026-04-26",
+        "2999-01-01"
+      ],
+      "edges": [],
+      "refs": [
+        "robot-buddy-game/src/save.rs:111-118",
+        "robot-buddy-game/src/save.rs:166-187",
+        "docs/adr/002-headless-test-harness.md:70",
+        "git:5045e750c1798cc44eeb634d09487a87be89e4fc"
+      ]
+    }
+  ]
+}
