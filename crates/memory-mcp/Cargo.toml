@@ -1,0 +1,13 @@
+[package]
+name = "memory-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP stdio server exposing recall/remember over the belief store (the dogfood surface)."
+
+[[bin]]
+name = "memory-mcp"
+path = "src/main.rs"
+
+[dependencies]
+memory-core = { path = "../memory-core" }
+serde_json = "1"
