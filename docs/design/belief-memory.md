@@ -224,6 +224,57 @@ measured choice, not an architectural commitment.
 `HOLE §3a`: does `ConfidenceModel` belong at L1 (per-belief) or L2 (it can see
 the query context)? Drafted with `ctx`, so L2-aware. Revisit.
 
+### 3b. Deficiency / known-debt axis (R4 finding — orthogonal to confidence)
+
+Harvesting the **kludge / known-debt** flavor (corpus round R4, real-repo grounding:
+`FIXME`/`HACK`/ADRs/commit rationale) surfaced a knowledge type the envelope
+doesn't represent. A kludge belief — *"`platform_check.php` is shipped as an empty
+no-op stub"*, *"GitHub-release download is a stopgap until the next npm version"*,
+*"WASM save timestamp hardcoded to 0"* — is **true AND known-deficient at once.**
+That is orthogonal to everything we model:
+
+- not **confidence** — the kludge is *certain* (we know exactly that it's there);
+- not **refutation** — it's *not wrong*, it's the actual current behaviour;
+- not **supersession** — it hasn't been replaced, it's live.
+
+So a belief needs a **deficiency axis** independent of `confidence`: *is this a
+compromise, and how bad?* Plus two structured fields the harvest showed are almost
+always present and load-bearing:
+
+- **`forcing_constraint`** — *why* we accept the debt (e.g. "tree-sitter has no
+  non-assoc primitive", "no native speech backend", "GLIBC < 2.39 on CI").
+- **`revisit_when` / `blocked_on`** — the condition under which the debt should be
+  reworked ("when miniquad releases the focus fix", "once procedural maps ship").
+  This is a *trigger*: when the constraint lifts, the debt should **resurface**.
+
+```rust
+pub struct Deficiency {            // None for ordinary beliefs
+    pub severity: Severity,        // Low | Medium | High
+    pub forcing_constraint: String,
+    pub revisit_when: Option<String>, // a condition; resolving it re-raises the debt
+}
+```
+
+Implications:
+- A new **query-type / capability**: *"what's hacky / known-debt around X that I
+  shouldn't rely on or should fix?"* — distinct from must-know (warnings),
+  hunch (uncertainty), and refutation (wrongness). The §9 usability run didn't see
+  it because the corpus had almost no debt beliefs; R4 is collecting them.
+- **Entrenchment ⊥ deficiency.** A belief can be maximally entrenched (definitely
+  true) *and* maximally deficient (definitely should change). Two independent axes;
+  confidence/entrenchment says nothing about *quality*.
+- `HOLE §3b`: is `revisit_when` free-text, or an edge to the *constraint belief*
+  (so "constraint X lifted" can be detected structurally and auto-resurface the
+  debt)? Leaning edge — it makes the trigger first-class. Possibly a `blocked_on`
+  edge kind (§4).
+
+> **Intent-dependent frontier (companion R4 finding).** The *design-rationale*
+> flavor showed the dual: a "why X over Y" ask needs the **rejected alternative**
+> surfaced — which is often a *superseded/reverted* belief. So the frontier filter
+> that current-state asks want (drop the loser) is exactly what why-asks want to
+> *keep*. **Frontier filtering must be intent-keyed, not a global default** —
+> recorded against §6 Recall (`Resolution`/`Filters` need a "include-defeated" mode).
+
 ---
 
 ## 4. Edge taxonomy (the spine)
