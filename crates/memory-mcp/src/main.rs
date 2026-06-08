@@ -12,7 +12,8 @@
 
 mod embed;
 
-use memory_core::{Belief, Graph};
+use memory_consolidate::{Consolidator, Orchestrator};
+use memory_core::{Belief, Cadence, EdgeKind, Graph, Hint, LinkCtx};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -122,7 +123,10 @@ fn tool_specs() -> Value {
                     "claim": { "type": "string", "description": "the proposition to remember" },
                     "refs": { "type": "array", "items": { "type": "string" },
                               "description": "grounding: files, commits, urls" },
-                    "body": { "type": "string", "description": "optional extra context / justification" }
+                    "body": { "type": "string", "description": "optional extra context / justification" },
+                    "supersedes": { "type": "string", "description": "optional HINT: slug or id of an \
+                                    earlier belief this one replaces. Just a hint — the Linker draws \
+                                    the actual edge; you never manage edges yourself." }
                 },
                 "required": ["claim"]
             }
@@ -149,8 +153,13 @@ fn recall(args: &Value, dir: &PathBuf) -> String {
         return "No memories yet.".into();
     }
     let defeated = g.defeated();
-    // Recall ranks only the CURRENT frontier — superseded/refuted beliefs are excluded.
-    let current: Vec<&Belief> = g.beliefs.iter().filter(|b| !defeated.contains(&b.id)).collect();
+    // Recall ranks only the CURRENT frontier — superseded/refuted beliefs are excluded, and so
+    // are reified edge-beliefs (they assert *about* beliefs; they are not answers themselves).
+    let current: Vec<&Belief> = g
+        .beliefs
+        .iter()
+        .filter(|b| !defeated.contains(&b.id) && b.relation.is_none())
+        .collect();
 
     match semantic_recall(&g, &current, &query, dir, limit) {
         Ok(text) => text,
@@ -204,7 +213,12 @@ fn semantic_recall(
     if scored.is_empty() {
         return Ok(format!("Nothing current recalled for \"{query}\"."));
     }
-    let dropped = g.beliefs.len() - current.len();
+    let d = g.defeated();
+    let dropped = g
+        .beliefs
+        .iter()
+        .filter(|b| b.relation.is_none() && d.contains(&b.id))
+        .count();
     let mut s = format!(
         "Recalled {} current belief(s) [semantic; {dropped} superseded/refuted dropped]:\n",
         scored.len().min(limit)
@@ -252,6 +266,7 @@ fn remember(args: &Value, dir: &PathBuf) -> String {
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
         .unwrap_or_default();
+    let supersedes = args.get("supersedes").and_then(|v| v.as_str()).map(String::from);
 
     let txn = iso_now();
     let id = bid(&format!("{claim}|{txn}"));
@@ -286,10 +301,49 @@ fn remember(args: &Value, dir: &PathBuf) -> String {
     fm.push('\n');
 
     let path = dir.join(format!("{id}.md"));
-    match std::fs::write(&path, fm) {
-        Ok(_) => format!("Remembered as {id} ([{slug}]). The memory layer will link it."),
-        Err(e) => format!("Failed to write memory: {e}"),
+    if let Err(e) = std::fs::write(&path, fm) {
+        return format!("Failed to write memory: {e}");
     }
+
+    // Run the consolidation pass (the author only HINTS; the Linker draws edges).
+    let hints: Vec<Hint> = supersedes
+        .iter()
+        .map(|r| Hint { kind: EdgeKind::Supersedes, target_ref: r.clone() })
+        .collect();
+    let linked = consolidate(dir, &id, &hints);
+    let note = if linked > 0 {
+        format!(" Linker drew {linked} edge(s).")
+    } else {
+        String::new()
+    };
+    format!("Remembered as {id} ([{slug}]).{note}")
+}
+
+/// The on-write consolidation pass: embed the new belief (so the proximity linker has its
+/// vector), build the link context, run the OnWrite + NREM linkers, and let the consolidator
+/// commit their proposals as reified edge-beliefs. Returns the number of edges drawn.
+fn consolidate(dir: &PathBuf, new_id: &str, hints: &[Hint]) -> usize {
+    let g = match Graph::load_dir(dir) {
+        Ok(g) => g,
+        Err(_) => return 0,
+    };
+    let Some(new) = g.beliefs.iter().find(|b| b.id == new_id) else {
+        return 0;
+    };
+    // make sure the new belief has an embedding cached (proximity linker reads vectors)
+    let oll = embed::Ollama::from_env();
+    let mut vectors = embed::load_cache(dir, &oll.model);
+    if !vectors.contains_key(new_id) {
+        if let Ok(vs) = oll.embed(&[format!("search_document: {}", new.claim)]) {
+            if let Some(v) = vs.into_iter().next() {
+                vectors.insert(new_id.to_string(), v);
+                embed::save_cache(dir, &oll.model, &vectors);
+            }
+        }
+    }
+    let ctx = LinkCtx { new, graph: &g, vectors: &vectors, hints };
+    let proposals = Orchestrator::with_defaults().run(&ctx, &[Cadence::OnWrite, Cadence::Nrem]);
+    Consolidator::commit(dir, &proposals)
 }
 
 // --- helpers -------------------------------------------------------------------------

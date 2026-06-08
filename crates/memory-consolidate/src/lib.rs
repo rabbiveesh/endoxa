@@ -1,0 +1,244 @@
+//! memory-consolidate — the impure consolidation tier (sibling to a future Reducer).
+//!
+//! Linkers PROPOSE edges; the **Consolidator** is the sole writer (commits immediately as
+//! reified edge-beliefs; risk is resolved at recall, not by a staging gate that could loop).
+//! The **Orchestrator** runs linkers by cadence. Two linkers ship:
+//!   - `SupersedeHintLinker`  — Cheap/OnWrite, no embeddings: author hint → `supersedes` edge.
+//!   - `ProximityLinker`      — Cheap/NREM, embeddings: nearest beliefs → `relates-to` edge.
+//! Adding a third (BYO) linker is: implement `Linker`, push it into the orchestrator.
+
+use memory_core::{
+    content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, LinkCtx, LinkProposal,
+    Linker, Tier,
+};
+use std::path::Path;
+
+// --- the Consolidator: the only thing that writes edges --------------------------------
+
+pub struct Consolidator;
+
+impl Consolidator {
+    /// Commit proposals as reified edge-beliefs. Idempotent: an edge's id is a hash of
+    /// `(kind, subject, object)`, so re-proposing the same relation is a no-op (dedup).
+    /// Returns the number of NEW edge-beliefs written.
+    pub fn commit(dir: &Path, proposals: &[LinkProposal]) -> usize {
+        let mut written = 0;
+        for p in proposals {
+            let edge_id =
+                content_id(&format!("{}|{}|{}", p.kind.as_str(), p.subject, p.object));
+            let path = dir.join(format!("{edge_id}.md"));
+            if path.exists() {
+                continue; // already linked — dedup / idempotent
+            }
+            if std::fs::write(&path, relation_belief_md(&edge_id, p)).is_ok() {
+                written += 1;
+            }
+        }
+        written
+    }
+}
+
+fn relation_belief_md(edge_id: &str, p: &LinkProposal) -> String {
+    let kind = p.kind.as_str();
+    let mut s = String::new();
+    s.push_str("---\n");
+    s.push_str(&format!("id: {edge_id}\n"));
+    s.push_str(&format!("slug: rel-{}\n", &edge_id[2..]));
+    s.push_str("claim:\n  kind: text\n  text: >-\n");
+    s.push_str(&format!("    [{}] {kind} [{}]\n", p.subject, p.object));
+    s.push_str(&format!("author:\n  kind: linker\n  id: {}\n", p.linker));
+    s.push_str("provenance:\n");
+    s.push_str(&format!("  txn_time: {}\n", iso_now()));
+    s.push_str("  valid_time: null\n");
+    s.push_str("  source:\n    kind: linker\n    session: consolidate\n    turn: 0\n");
+    s.push_str(&format!("  refs:\n    - hinted_by:{}\n", p.subject));
+    s.push_str("  derived_from: []\n");
+    s.push_str("confidence:\n  directness: linked\n  observation_count: 1\n");
+    s.push_str(&format!("  source_weight: {}\n  asserted: null\n", p.confidence.weight()));
+    s.push_str(&format!("relation:\n  kind: {kind}\n  subject: {}\n  object: {}\n", p.subject, p.object));
+    s.push_str("edges: []\ncoord: null\n---\n\n");
+    s.push_str(&p.rationale);
+    s.push('\n');
+    s
+}
+
+// --- the Orchestrator: runs linkers by cadence -----------------------------------------
+
+pub struct Orchestrator {
+    pub linkers: Vec<Box<dyn Linker>>,
+}
+
+impl Orchestrator {
+    /// The default registry: the two shipped linkers. BYO = push another `Box<dyn Linker>`.
+    pub fn with_defaults() -> Orchestrator {
+        Orchestrator {
+            linkers: vec![
+                Box::new(SupersedeHintLinker),
+                Box::new(ProximityLinker::default()),
+            ],
+        }
+    }
+
+    /// Run every linker whose cadence is in `cadences`, collecting their proposals.
+    pub fn run(&self, ctx: &LinkCtx, cadences: &[Cadence]) -> Vec<LinkProposal> {
+        let mut props = Vec::new();
+        for l in &self.linkers {
+            if cadences.contains(&l.cadence()) {
+                props.extend(l.link(ctx));
+            }
+        }
+        props
+    }
+}
+
+// --- Linker 1: supersede-from-hint (Cheap, OnWrite, no LLM) -----------------------------
+
+pub struct SupersedeHintLinker;
+
+impl Linker for SupersedeHintLinker {
+    fn id(&self) -> &str {
+        "supersede-hint@1"
+    }
+    fn tier(&self) -> Tier {
+        Tier::Cheap
+    }
+    fn cadence(&self) -> Cadence {
+        Cadence::OnWrite
+    }
+    fn link(&self, ctx: &LinkCtx) -> Vec<LinkProposal> {
+        let mut out = Vec::new();
+        for h in ctx.hints {
+            if matches!(h.kind, EdgeKind::Supersedes) {
+                if let Some(old) = ctx.graph.resolve_ref(&h.target_ref) {
+                    if old != ctx.new.id {
+                        out.push(LinkProposal {
+                            kind: EdgeKind::Supersedes,
+                            subject: ctx.new.id.clone(),
+                            object: old,
+                            confidence: Confidence::Strong,
+                            rationale: "author hint: this belief supersedes the target".into(),
+                            linker: self.id().into(),
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+// --- Linker 2: embedding proximity (Cheap, NREM) ---------------------------------------
+
+pub struct ProximityLinker {
+    pub k: usize,
+    pub strong: f32,
+    pub plausible: f32,
+}
+
+impl Default for ProximityLinker {
+    fn default() -> Self {
+        ProximityLinker { k: 5, strong: 0.80, plausible: 0.62 }
+    }
+}
+
+impl Linker for ProximityLinker {
+    fn id(&self) -> &str {
+        "proximity@1"
+    }
+    fn tier(&self) -> Tier {
+        Tier::Cheap
+    }
+    fn cadence(&self) -> Cadence {
+        Cadence::Nrem
+    }
+    fn link(&self, ctx: &LinkCtx) -> Vec<LinkProposal> {
+        let Some(nv) = ctx.vectors.get(&ctx.new.id) else {
+            return Vec::new(); // no embedding for the new belief — skip gracefully
+        };
+        let mut scored: Vec<(&Belief, f32)> = ctx
+            .graph
+            .beliefs
+            .iter()
+            .filter(|b| b.id != ctx.new.id && b.relation.is_none())
+            .filter_map(|b| ctx.vectors.get(&b.id).map(|v| (b, cosine(nv, v))))
+            .filter(|(_, s)| *s >= self.plausible)
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored
+            .into_iter()
+            .take(self.k)
+            .map(|(b, s)| LinkProposal {
+                // a non-defeating annotation kind — never touches the frontier
+                kind: EdgeKind::Other("relates-to".into()),
+                subject: ctx.new.id.clone(),
+                object: b.id.clone(),
+                confidence: if s >= self.strong {
+                    Confidence::Strong
+                } else {
+                    Confidence::Plausible
+                },
+                rationale: format!("embedding similarity {s:.2}"),
+                linker: self.id().into(),
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use memory_core::{Graph, Hint};
+    use std::collections::HashMap;
+
+    fn content(id: &str, slug: &str) -> Belief {
+        Belief { id: id.into(), slug: slug.into(), claim: format!("claim {slug}"), ..Belief::default() }
+    }
+
+    #[test]
+    fn supersede_hint_links_and_defeats() {
+        let dir = std::env::temp_dir().join(format!("mc-test-{}", content_id("sup")));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let g = Graph::from_beliefs(vec![content("b_old", "old"), content("b_new", "new")]);
+        let vectors = HashMap::new();
+        let new = g.beliefs.iter().find(|b| b.id == "b_new").unwrap();
+        let hints = vec![Hint { kind: EdgeKind::Supersedes, target_ref: "old".into() }];
+        let ctx = LinkCtx { new, graph: &g, vectors: &vectors, hints: &hints };
+
+        let props = Orchestrator::with_defaults().run(&ctx, &[Cadence::OnWrite, Cadence::Nrem]);
+        assert_eq!(props.len(), 1, "one supersede proposal");
+        assert_eq!(Consolidator::commit(&dir, &props), 1);
+        assert_eq!(Consolidator::commit(&dir, &props), 0, "idempotent re-commit");
+
+        // reload with the content beliefs + the new edge-belief; old must be defeated
+        let mut beliefs = vec![content("b_old", "old"), content("b_new", "new")];
+        let edge_path = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .next()
+            .unwrap();
+        beliefs.push(Belief::parse(&std::fs::read_to_string(edge_path).unwrap()).unwrap());
+        let g2 = Graph::from_beliefs(beliefs);
+        assert!(g2.defeated().contains("b_old"), "old defeated via reified edge-belief");
+        assert!(!g2.defeated().contains("b_new"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn proximity_proposes_relates_to_for_near_beliefs() {
+        let g = Graph::from_beliefs(vec![content("b_new", "new"), content("b_near", "near"), content("b_far", "far")]);
+        let mut vectors = HashMap::new();
+        vectors.insert("b_new".to_string(), vec![1.0, 0.0, 0.0]);
+        vectors.insert("b_near".to_string(), vec![0.95, 0.05, 0.0]); // ~0.99 cosine
+        vectors.insert("b_far".to_string(), vec![0.0, 1.0, 0.0]); // 0.0 cosine
+        let new = g.beliefs.iter().find(|b| b.id == "b_new").unwrap();
+        let ctx = LinkCtx { new, graph: &g, vectors: &vectors, hints: &[] };
+
+        let props = ProximityLinker::default().link(&ctx);
+        assert_eq!(props.len(), 1, "only the near belief is above threshold");
+        assert_eq!(props[0].object, "b_near");
+        assert_eq!(props[0].kind.as_str(), "relates-to");
+        assert!(!props[0].kind.is_defeating(), "relates-to must not affect the frontier");
+    }
+}

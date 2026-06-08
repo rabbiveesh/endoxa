@@ -10,4 +10,5 @@ path = "src/main.rs"
 
 [dependencies]
 memory-core = { path = "../memory-core" }
+memory-consolidate = { path = "../memory-consolidate" }
 serde_json = "1"

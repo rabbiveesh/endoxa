@@ -1,22 +1,21 @@
 //! memory-core — the deterministic heart of the belief-memory system.
 //!
-//! Pure, no-LLM, no-network: belief model + loader + **frontier resolver** (design P0).
-//! The frontier resolver is the keystone the usability study identified — semantic
-//! relevance is anti-correlated with currency, so the most lexically-relevant belief is
-//! often the *superseded/refuted* one. Resolving the frontier is what stops recall from
-//! returning the inverted answer.
-//!
-//! First cut is deliberately hacky (zero deps, hand-rolled parser, in-memory graph) — but
-//! the L0 belief *format* it reads is the durable contract; everything here above L0 is
-//! regenerable.
+//! Pure, no-LLM, no-network: belief model + loader + **frontier resolver** + the **relation
+//! semantics registry** (which edge kinds defeat vs merely annotate) + the **Linker trait**
+//! and value types (impls live in `memory-consolidate`; the trait stays here so it pulls no
+//! LLM into core). First cut is hacky above L0; the belief *file format* is the durable part.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type Id = String;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Relation/edge kind. Core kinds are named; anything else is a namespaced plugin kind
+/// (`Other("myplugin:analogous")`) — the registry decides its semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeKind {
     Supports,
     Attacks,
@@ -24,26 +23,59 @@ pub enum EdgeKind {
     DerivedFrom,
     Refines,
     Adjudicates,
+    Other(String),
+}
+
+/// What a relation kind *does* to recall — the registry seam. Frontier-stage semantics
+/// change the *current* set; surfacing-stage semantics (Annotate, and later Collapse/Boost)
+/// change the ranked/deduped set without changing truth. First cut ships Defeat + Annotate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Semantic {
+    /// Frontier-stage: an undefeated edge of this kind defeats its target.
+    Defeat,
+    /// Surfacing-stage default: records a relation, does not change the frontier.
+    Annotate,
 }
 
 impl EdgeKind {
-    fn parse(s: &str) -> Option<EdgeKind> {
-        Some(match s {
+    /// Infallible: an unknown string becomes a namespaced `Other`.
+    pub fn parse(s: &str) -> EdgeKind {
+        match s {
             "supports" => EdgeKind::Supports,
             "attacks" => EdgeKind::Attacks,
             "supersedes" => EdgeKind::Supersedes,
             "derived_from" => EdgeKind::DerivedFrom,
             "refines" => EdgeKind::Refines,
             "adjudicates" => EdgeKind::Adjudicates,
-            _ => return None,
-        })
+            other => EdgeKind::Other(other.to_string()),
+        }
     }
 
-    /// Edges that DEFEAT their target on a world's frontier (revision + verdict).
-    /// `attacks` alone is a *surfaced* conflict, NOT a defeat — open conflicts keep both
-    /// sides live; only an `adjudicates` verdict or a `supersedes` defeats.
-    pub fn is_defeating(self) -> bool {
-        matches!(self, EdgeKind::Supersedes | EdgeKind::Adjudicates)
+    pub fn as_str(&self) -> &str {
+        match self {
+            EdgeKind::Supports => "supports",
+            EdgeKind::Attacks => "attacks",
+            EdgeKind::Supersedes => "supersedes",
+            EdgeKind::DerivedFrom => "derived_from",
+            EdgeKind::Refines => "refines",
+            EdgeKind::Adjudicates => "adjudicates",
+            EdgeKind::Other(s) => s,
+        }
+    }
+
+    /// THE registry seam. Today a match; later a pluggable `HashMap<String, Semantic>` that
+    /// `memory-consolidate` / plugins populate when they register a relation type.
+    pub fn semantic(&self) -> Semantic {
+        match self {
+            EdgeKind::Supersedes | EdgeKind::Adjudicates => Semantic::Defeat,
+            _ => Semantic::Annotate, // supports/refines/attacks/derived_from/Other(..) annotate
+        }
+    }
+
+    /// `attacks` alone is a *surfaced* conflict (Annotate), NOT a defeat — only an
+    /// `adjudicates` verdict or a `supersedes` defeats.
+    pub fn is_defeating(&self) -> bool {
+        self.semantic() == Semantic::Defeat
     }
 }
 
@@ -51,6 +83,16 @@ impl EdgeKind {
 pub struct Edge {
     pub kind: EdgeKind,
     pub target: Id,
+}
+
+/// A reified relational belief: its claim is a triple `(subject) -kind-> (object)`. Every
+/// *assertional* edge reifies into one of these so the relation can be argued/defeated
+/// without touching either endpoint; only self-provenance (`derived_from`) stays inline.
+#[derive(Debug, Clone)]
+pub struct Relation {
+    pub kind: EdgeKind,
+    pub subject: Id,
+    pub object: Id,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -64,14 +106,14 @@ pub struct Belief {
     pub source_weight: f32,
     pub asserted: Option<f32>,
     pub edges: Vec<Edge>,
+    /// Set iff this belief IS a reified relation (an edge-belief). When present, the belief
+    /// asserts *about* two other beliefs and is hidden from recall's surfaced set.
+    pub relation: Option<Relation>,
 }
 
 impl Belief {
-    /// Parse one belief markdown file (YAML-ish frontmatter + body). Hand-rolled and
-    /// zero-dep: the frontmatter is machine-generated and regular (see
-    /// `corpus/_belief_lib.py`), so a small stateful line parser is enough.
+    /// Parse one belief markdown file (YAML-ish frontmatter). Hand-rolled, zero-dep.
     pub fn parse(text: &str) -> Option<Belief> {
-        // isolate the frontmatter (between the first two `---` lines)
         let mut fm: Vec<&str> = Vec::new();
         let mut started = false;
         for line in text.lines() {
@@ -95,6 +137,8 @@ impl Belief {
         let mut section = String::new();
         let mut collecting_claim = false;
         let mut pending_edge_kind: Option<EdgeKind> = None;
+        let (mut rel_kind, mut rel_subj, mut rel_obj) =
+            (None::<EdgeKind>, String::new(), String::new());
 
         for line in fm {
             let indent = line.len() - line.trim_start().len();
@@ -102,8 +146,6 @@ impl Belief {
             if trimmed.is_empty() {
                 continue;
             }
-
-            // folded claim scalar: keep appending the indented continuation lines
             if collecting_claim {
                 if indent >= 4 {
                     if !b.claim.is_empty() {
@@ -112,7 +154,7 @@ impl Belief {
                     b.claim.push_str(trimmed);
                     continue;
                 }
-                collecting_claim = false; // fall through to process this line normally
+                collecting_claim = false;
             }
 
             if indent == 0 {
@@ -153,7 +195,7 @@ impl Belief {
                     }
                     "edges" => {
                         if let Some(v) = trimmed.strip_prefix("- kind:") {
-                            pending_edge_kind = EdgeKind::parse(v.trim());
+                            pending_edge_kind = Some(EdgeKind::parse(v.trim()));
                         } else if let Some(v) = trimmed.strip_prefix("target:") {
                             if let Some(k) = pending_edge_kind.take() {
                                 let target =
@@ -164,6 +206,16 @@ impl Belief {
                             }
                         }
                     }
+                    // reified relation (edge-belief): kind/subject/object over two belief-ids
+                    "relation" => {
+                        if let Some(v) = trimmed.strip_prefix("kind:") {
+                            rel_kind = Some(EdgeKind::parse(v.trim()));
+                        } else if let Some(v) = trimmed.strip_prefix("subject:") {
+                            rel_subj = v.trim().split_whitespace().next().unwrap_or("").to_string();
+                        } else if let Some(v) = trimmed.strip_prefix("object:") {
+                            rel_obj = v.trim().split_whitespace().next().unwrap_or("").to_string();
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -171,6 +223,9 @@ impl Belief {
 
         if b.id.is_empty() {
             return None;
+        }
+        if let (Some(kind), false, false) = (rel_kind, rel_subj.is_empty(), rel_obj.is_empty()) {
+            b.relation = Some(Relation { kind, subject: rel_subj, object: rel_obj });
         }
         Some(b)
     }
@@ -193,6 +248,107 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     dot / (na.sqrt() * nb.sqrt())
 }
 
+// --- the Linker surface (trait + value types; impls live in memory-consolidate) ----------
+
+/// A single ordinal confidence scale (no float, no taxonomy — add dimensions later if forced).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confidence {
+    Weak,
+    Plausible,
+    Strong,
+}
+impl Confidence {
+    pub fn weight(self) -> f32 {
+        match self {
+            Confidence::Weak => 0.4,
+            Confidence::Plausible => 0.65,
+            Confidence::Strong => 0.9,
+        }
+    }
+}
+
+/// Cost class — the gate for cheaper-model tiering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    Cheap,
+    Mid,
+    Expensive,
+}
+
+/// When a linker runs — the "sleep stages".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cadence {
+    OnWrite,
+    Nrem,
+    Rem,
+    OnDemand,
+}
+
+/// An author's relationship *hint* — a low-trust proposal the Linker consumes (never an edge).
+#[derive(Debug, Clone)]
+pub struct Hint {
+    pub kind: EdgeKind,
+    pub target_ref: String, // slug or id
+}
+
+/// A drafted edge — what a Linker PROPOSES. The consolidator is the sole writer; linkers
+/// never commit, which keeps BYO-linkers safe and lets the agreement layer be one-point-reversible.
+#[derive(Debug, Clone)]
+pub struct LinkProposal {
+    pub kind: EdgeKind,
+    pub subject: Id,
+    pub object: Id,
+    pub confidence: Confidence,
+    pub rationale: String,
+    pub linker: String, // id@version of the proposing linker
+}
+
+/// What a linker gets to look at.
+pub struct LinkCtx<'a> {
+    pub new: &'a Belief,
+    pub graph: &'a Graph,
+    pub vectors: &'a HashMap<Id, Vec<f32>>,
+    pub hints: &'a [Hint],
+}
+
+/// Bring-your-own-linker. Declares its cost/cadence so the orchestrator can schedule + budget;
+/// `link` returns drafts, never writes.
+pub trait Linker {
+    fn id(&self) -> &str;
+    fn tier(&self) -> Tier;
+    fn cadence(&self) -> Cadence;
+    fn link(&self, ctx: &LinkCtx) -> Vec<LinkProposal>;
+}
+
+// --- ids + time (shared by the surface so edge-beliefs get stable ids) -------------------
+
+/// Placeholder content id (low 48 bits of std SipHash). Deterministic; real scheme is
+/// sha256(observation)[:12]. Stable for a given seed → idempotent edge ids.
+pub fn content_id(seed: &str) -> String {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    seed.hash(&mut h);
+    format!("b_{:012x}", h.finish() & 0xffff_ffff_ffff)
+}
+
+pub fn iso_now() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let z = (secs / 86400) as i64 + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let (y, m, d) = (y + if m <= 2 { 1 } else { 0 }, m, d);
+    let sod = secs % 86400;
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", sod / 3600, (sod % 3600) / 60, sod % 60)
+}
+
 /// An in-memory belief graph for one corpus / world `main`.
 pub struct Graph {
     pub beliefs: Vec<Belief>,
@@ -208,14 +364,9 @@ impl Graph {
             by_id.insert(b.id.clone(), i);
             by_slug.insert(b.slug.clone(), i);
         }
-        Graph {
-            beliefs,
-            by_id,
-            by_slug,
-        }
+        Graph { beliefs, by_id, by_slug }
     }
 
-    /// Load every `*.md` belief from a `corpus/<name>/beliefs/` directory.
     pub fn load_dir(dir: &Path) -> std::io::Result<Graph> {
         let mut beliefs = Vec::new();
         for entry in fs::read_dir(dir)? {
@@ -235,27 +386,35 @@ impl Graph {
         self.by_slug.get(slug).map(|&i| &self.beliefs[i])
     }
 
-    /// **Frontier resolution (design P0).** Returns the set of belief ids DEFEATED on the
-    /// `main` frontier — i.e. superseded or adjudicated-against by a belief that is itself
-    /// not defeated.
-    ///
-    /// It is frontier-relative and **non-monotonic**: a later verdict that defeats an
-    /// earlier verdict thereby REINSTATES the earlier verdict's target (verdict-of-a-
-    /// verdict). Computed as an alternating fixpoint — each round recomputes the defeated
-    /// set from scratch using only the still-undefeated attackers, so reinstatement falls
-    /// out naturally. The corpus's defeat graph is time-acyclic (newer defeats older), so
-    /// it converges; the iteration cap is a backstop.
+    /// id-or-slug → canonical id (prefers id).
+    pub fn resolve_ref(&self, r: &str) -> Option<Id> {
+        if self.by_id.contains_key(r) {
+            Some(r.to_string())
+        } else {
+            self.by_slug.get(r).map(|&i| self.beliefs[i].id.clone())
+        }
+    }
+
+    /// **Frontier resolution.** Returns the DEFEATED ids on `main`. Frontier-relative and
+    /// non-monotonic (verdict-of-a-verdict reinstates). Honors BOTH inline defeating edges
+    /// (corpus back-compat) and reified `Relation` edge-beliefs, dispatched through the
+    /// `EdgeKind::semantic()` registry so non-defeating kinds (annotations) never affect it.
     pub fn defeated(&self) -> HashSet<Id> {
         let mut defeated: HashSet<Id> = HashSet::new();
         for _ in 0..(self.beliefs.len() + 5) {
             let mut next: HashSet<Id> = HashSet::new();
             for b in &self.beliefs {
                 if defeated.contains(&b.id) {
-                    continue; // a defeated belief defeats nothing
+                    continue; // a defeated belief (or edge-belief) defeats nothing
                 }
                 for e in &b.edges {
                     if e.kind.is_defeating() && self.by_id.contains_key(&e.target) {
                         next.insert(e.target.clone());
+                    }
+                }
+                if let Some(r) = &b.relation {
+                    if r.kind.is_defeating() && self.by_id.contains_key(&r.object) {
+                        next.insert(r.object.clone());
                     }
                 }
             }
@@ -267,7 +426,8 @@ impl Graph {
         defeated
     }
 
-    /// Beliefs that live on the current `main` frontier (not defeated).
+    /// Beliefs on the current `main` frontier (not defeated). Includes edge-beliefs; callers
+    /// that surface to a human should additionally drop `relation.is_some()`.
     pub fn current(&self) -> Vec<&Belief> {
         let d = self.defeated();
         self.beliefs.iter().filter(|b| !d.contains(&b.id)).collect()

@@ -1,0 +1,11 @@
+[package]
+name = "memory-consolidate"
+version = "0.1.0"
+edition = "2021"
+description = "Consolidation: linkers (propose edges) + the consolidator (sole writer) + orchestrator."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+memory-core = { path = "../memory-core" }
