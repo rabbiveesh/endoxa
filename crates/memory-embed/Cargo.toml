@@ -1,0 +1,11 @@
+[package]
+name = "memory-embed"
+version = "0.1.0"
+edition = "2021"
+description = "Ollama-backed embeddings + an on-disk vector cache (shared by the surfaces)."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1"

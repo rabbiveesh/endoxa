@@ -15,14 +15,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 
 [[package]]
+name = "memory-cli"
+version = "0.1.0"
+dependencies = [
+ "memory-consolidate",
+ "memory-core",
+ "memory-embed",
+]
+
+[[package]]
+name = "memory-consolidate"
+version = "0.1.0"
+dependencies = [
+ "memory-core",
+]
+
+[[package]]
 name = "memory-core"
 version = "0.1.0"
 
 [[package]]
-name = "memory-mcp"
+name = "memory-embed"
 version = "0.1.0"
 dependencies = [
- "memory-core",
  "serde_json",
 ]
 

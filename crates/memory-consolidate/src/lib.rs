@@ -18,10 +18,10 @@ use std::path::Path;
 pub struct Consolidator;
 
 impl Consolidator {
-    /// Commit proposals as reified edge-beliefs. Idempotent: an edge's id is a hash of
-    /// `(kind, subject, object)`, so re-proposing the same relation is a no-op (dedup).
+    /// Commit proposals as reified edge-beliefs in `scope`. Idempotent: an edge's id is a
+    /// hash of `(kind, subject, object)`, so re-proposing the same relation is a no-op.
     /// Returns the number of NEW edge-beliefs written.
-    pub fn commit(dir: &Path, proposals: &[LinkProposal]) -> usize {
+    pub fn commit(dir: &Path, proposals: &[LinkProposal], scope: &str) -> usize {
         let mut written = 0;
         for p in proposals {
             let edge_id =
@@ -30,7 +30,7 @@ impl Consolidator {
             if path.exists() {
                 continue; // already linked — dedup / idempotent
             }
-            if std::fs::write(&path, relation_belief_md(&edge_id, p)).is_ok() {
+            if std::fs::write(&path, relation_belief_md(&edge_id, p, scope)).is_ok() {
                 written += 1;
             }
         }
@@ -38,12 +38,13 @@ impl Consolidator {
     }
 }
 
-fn relation_belief_md(edge_id: &str, p: &LinkProposal) -> String {
+fn relation_belief_md(edge_id: &str, p: &LinkProposal, scope: &str) -> String {
     let kind = p.kind.as_str();
     let mut s = String::new();
     s.push_str("---\n");
     s.push_str(&format!("id: {edge_id}\n"));
     s.push_str(&format!("slug: rel-{}\n", &edge_id[2..]));
+    s.push_str(&format!("scope: {scope}\n"));
     s.push_str("claim:\n  kind: text\n  text: >-\n");
     s.push_str(&format!("    [{}] {kind} [{}]\n", p.subject, p.object));
     s.push_str(&format!("author:\n  kind: linker\n  id: {}\n", p.linker));
@@ -208,8 +209,8 @@ mod tests {
 
         let props = Orchestrator::with_defaults().run(&ctx, &[Cadence::OnWrite, Cadence::Nrem]);
         assert_eq!(props.len(), 1, "one supersede proposal");
-        assert_eq!(Consolidator::commit(&dir, &props), 1);
-        assert_eq!(Consolidator::commit(&dir, &props), 0, "idempotent re-commit");
+        assert_eq!(Consolidator::commit(&dir, &props, "global"), 1);
+        assert_eq!(Consolidator::commit(&dir, &props, "global"), 0, "idempotent re-commit");
 
         // reload with the content beliefs + the new edge-belief; old must be defeated
         let mut beliefs = vec![content("b_old", "old"), content("b_new", "new")];

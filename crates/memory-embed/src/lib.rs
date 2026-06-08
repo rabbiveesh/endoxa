@@ -1,8 +1,6 @@
-//! Ollama-backed embeddings for semantic recall, plus a tiny on-disk vector cache.
-//!
-//! Shells to `curl` (already a dep of installing Ollama) → POST /api/embed, so no HTTP
-//! crate is needed. nomic-embed-text is asymmetric: callers must prefix docs with
-//! `search_document: ` and queries with `search_query: ` (we do this at the call site).
+//! Ollama-backed embeddings + a tiny on-disk vector cache. Shells to `curl` (so no HTTP
+//! crate). nomic-embed-text is asymmetric: callers prefix docs with `search_document: ` and
+//! queries with `search_query: `.
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -23,8 +21,8 @@ impl Ollama {
         }
     }
 
-    /// Embed a batch of inputs in one call. Errors (ollama down, model not pulled, no curl)
-    /// are returned as strings so recall can fall back to lexical.
+    /// Embed a batch in one call. Errors (ollama down, model not pulled, no curl) are returned
+    /// as strings so callers can fall back to lexical.
     pub fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
         if inputs.is_empty() {
             return Ok(vec![]);
@@ -32,16 +30,9 @@ impl Ollama {
         let body = json!({ "model": self.model, "input": inputs }).to_string();
         let mut child = Command::new("curl")
             .args([
-                "-s",
-                "--max-time",
-                "180",
-                "-X",
-                "POST",
+                "-s", "--max-time", "180", "-X", "POST",
                 &format!("{}/api/embed", self.url),
-                "-H",
-                "Content-Type: application/json",
-                "--data-binary",
-                "@-",
+                "-H", "Content-Type: application/json", "--data-binary", "@-",
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -76,8 +67,6 @@ impl Ollama {
     }
 }
 
-/// Load the per-store vector cache (`.embeddings.json`); empty if absent or the model
-/// it was built with differs from `model` (so changing models re-embeds cleanly).
 pub fn load_cache(dir: &Path, model: &str) -> HashMap<String, Vec<f32>> {
     let path = dir.join(".embeddings.json");
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -93,10 +82,7 @@ pub fn load_cache(dir: &Path, model: &str) -> HashMap<String, Vec<f32>> {
     if let Some(obj) = v.get("vectors").and_then(|x| x.as_object()) {
         for (k, val) in obj {
             if let Some(arr) = val.as_array() {
-                map.insert(
-                    k.clone(),
-                    arr.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect(),
-                );
+                map.insert(k.clone(), arr.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect());
             }
         }
     }

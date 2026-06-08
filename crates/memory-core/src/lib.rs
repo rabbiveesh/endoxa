@@ -109,6 +109,10 @@ pub struct Belief {
     /// Set iff this belief IS a reified relation (an edge-belief). When present, the belief
     /// asserts *about* two other beliefs and is hidden from recall's surfaced set.
     pub relation: Option<Relation>,
+    /// Relevance scope: "" / "global" (everywhere), "repo:<id>" (repo canon), or
+    /// "repo:<id>@<branch>" (provisional, branch-local). Recall filters by active scopes;
+    /// filtering the subgraph BEFORE resolving the frontier gives branch divergence for free.
+    pub scope: String,
 }
 
 impl Belief {
@@ -163,6 +167,7 @@ impl Belief {
                 match key {
                     "id" => b.id = val.to_string(),
                     "slug" => b.slug = val.to_string(),
+                    "scope" => b.scope = val.to_string(),
                     "kind" => {
                         if val == "project-scope" {
                             b.project_scope = true;
