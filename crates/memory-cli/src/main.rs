@@ -25,6 +25,7 @@ fn main() {
         Some("expand") => cmd_expand(&args[1..]),
         Some("ask") => cmd_ask(&args[1..]),
         Some("forget") => cmd_forget(&args[1..]),
+        Some("promote") => cmd_promote(&args[1..]),
         Some("consolidate") => cmd_consolidate(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
@@ -34,6 +35,7 @@ fn main() {
             eprintln!("  mem expand <slug|id>          # one-hop: show a belief's linked context");
             eprintln!("  mem ask \"<question>\" [--limit N]  # LLM-synthesized grounded answer (opt-in)");
             eprintln!("  mem forget <slug|id> [--reason R]  # retract a belief: recall drops it (file kept)");
+            eprintln!("  mem promote [<branch>] [--dry-run]  # lift a merged branch's beliefs into repo canon");
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem scope");
             std::process::exit(2);
@@ -374,6 +376,149 @@ fn cmd_forget(args: &[String]) {
         0 => println!("[{slug}] was already forgotten (retraction exists)."),
         _ => println!("forgot [{slug}] in scope={scope} — recall will no longer surface it (file kept for reliving)"),
     }
+}
+
+/// `mem promote [<branch>] [--dry-run]` — lift a feature branch's beliefs into repo canon.
+///
+/// Run client-side AFTER the branch merges (it reads LOCAL git state — the reason `mem` is a CLI,
+/// not a server). Policy (decided earlier, recalled from the store):
+///  - NON-DESTRUCTIVE: the original `@branch` beliefs are left on disk untouched, so the branch
+///    world stays relivable. Promotion writes a COPY into canon, it does not move/relabel.
+///  - Each branch content-belief gets a canon copy with a fresh, DETERMINISTIC id
+///    (`content_id("promote|<orig>|<canon-scope>")`) so re-running is idempotent, and a
+///    `derived_from` pointer back to the branch original (provenance / reliving).
+///  - EDGES COME ALONG: each branch edge-belief is re-emitted into canon through the Consolidator
+///    (the sole edge writer) with its endpoints REMAPPED to the promoted copies; an endpoint
+///    already in canon is kept; an unresolvable endpoint drops that edge (a canon edge must point
+///    at canon beliefs).
+///  - CONFLICTS: naive-merge-now, reconcile-later. No conflict gating here — copies land in canon
+///    and frontier resolution + a later `mem consolidate`/adjudication settle any clash.
+///  - The duplicate claim (branch original + canon copy) is expected to be collapsed by the
+///    reduction/caching layer; on `main` only the canon copy is in scope anyway.
+fn cmd_promote(args: &[String]) {
+    let mut branch_arg: Option<String> = None;
+    let mut dry_run = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--dry-run" => dry_run = true,
+            s if branch_arg.is_none() && !s.starts_with("--") => branch_arg = Some(s.to_string()),
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let Some(id) = repo_id() else {
+        eprintln!("not in a git repo — nothing to promote");
+        std::process::exit(2);
+    };
+    let branch = match branch_arg.or_else(current_branch) {
+        Some(b) => b,
+        None => { eprintln!("could not determine a branch to promote"); std::process::exit(2); }
+    };
+    if is_default_branch(&branch) {
+        eprintln!("'{branch}' is the default branch — it IS repo canon; nothing to promote");
+        std::process::exit(2);
+    }
+    let from_scope = format!("repo:{id}@{branch}");
+    let canon_scope = format!("repo:{id}");
+
+    let dir = store_dir();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+
+    let branch_beliefs: Vec<&Belief> =
+        g.beliefs.iter().filter(|b| belief_scope(b) == from_scope).collect();
+    if branch_beliefs.is_empty() {
+        println!("No branch-local beliefs in scope ({from_scope}) — nothing to promote.");
+        return;
+    }
+
+    // Deterministic id remap: branch-original id → promoted-canon id (idempotent on re-run).
+    let content: Vec<&Belief> =
+        branch_beliefs.iter().copied().filter(|b| b.relation.is_none()).collect();
+    let mut remap: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for b in &content {
+        remap.insert(b.id.clone(), content_id(&format!("promote|{}|{canon_scope}", b.id)));
+    }
+    let existing: std::collections::HashSet<&str> =
+        g.beliefs.iter().map(|b| b.id.as_str()).collect();
+
+    let mut promoted_content = 0usize;
+    for b in &content {
+        let new_id = remap[&b.id].clone();
+        if existing.contains(new_id.as_str()) {
+            continue; // already promoted — idempotent
+        }
+        if dry_run {
+            println!("would promote [{}] {} → {canon_scope}", b.slug, truncate(&b.claim, 70));
+            promoted_content += 1;
+            continue;
+        }
+        let txn = iso_now();
+        let body = format!("(promoted from {from_scope} — original belief {})", b.id);
+        let md = promoted_belief_md(&new_id, &b.slug, &canon_scope, &b.claim, &body, &txn, &b.id);
+        if let Err(e) = std::fs::write(dir.join(format!("{new_id}.md")), md) {
+            eprintln!("failed to write promoted belief: {e}");
+            std::process::exit(1);
+        }
+        promoted_content += 1;
+    }
+
+    // Carry the edges: remap endpoints into canon, re-emit through the Consolidator.
+    let resolve = |endpoint: &str| -> Option<String> {
+        if let Some(p) = remap.get(endpoint) {
+            Some(p.clone())
+        } else if g.beliefs.iter().any(|x| x.id == endpoint && belief_scope(x) == canon_scope) {
+            Some(endpoint.to_string()) // already canon — point straight at it
+        } else {
+            None
+        }
+    };
+    let mut proposals: Vec<LinkProposal> = Vec::new();
+    let mut dropped_edges = 0usize;
+    for e in branch_beliefs.iter().copied().filter(|b| b.relation.is_some()) {
+        let r = e.relation.as_ref().unwrap();
+        let (Some(subject), Some(object)) = (resolve(&r.subject), resolve(&r.object)) else {
+            dropped_edges += 1;
+            continue;
+        };
+        proposals.push(LinkProposal {
+            kind: r.kind.clone(),
+            subject,
+            object,
+            confidence: Confidence::Strong,
+            rationale: format!("mem promote: carried from {from_scope}"),
+            linker: "mem-promote@1".into(),
+        });
+    }
+
+    if dry_run {
+        println!(
+            "dry-run: {promoted_content} belief(s) + {} edge(s) would promote into {canon_scope} ({dropped_edges} unresolvable edge(s) dropped)",
+            proposals.len()
+        );
+        return;
+    }
+    let edges_drawn = Consolidator::commit(&dir, &proposals, &canon_scope);
+    println!(
+        "promoted {promoted_content} belief(s) and {edges_drawn} edge(s) from {from_scope} into {canon_scope} \
+         (originals kept; {dropped_edges} edge(s) dropped as unresolvable). Conflicts settle at recall — run `mem consolidate` to adjudicate."
+    );
+}
+
+/// Like `belief_md`, but stamps `derived_from: [<origin>]` so a promoted canon belief points back
+/// at its branch original (provenance / reliving). Format otherwise matches `remember`.
+fn promoted_belief_md(id: &str, slug: &str, scope: &str, claim: &str, body: &str, txn: &str, origin: &str) -> String {
+    let base = belief_md(id, slug, scope, claim, &[], body, txn);
+    base.replace("  derived_from: []\n", &format!("  derived_from:\n    - {origin}\n"))
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    let s = s.replace('\n', " ");
+    if s.chars().count() <= n { s } else { format!("{}…", s.chars().take(n).collect::<String>()) }
 }
 
 /// Surfacing-stage collapse: drop a generic `relates-to`/`analogous` edge from `anchor` to a
@@ -719,6 +864,18 @@ mod tests {
         assert_eq!(kinds.len(), 2);
         assert!(kinds.contains(&("refines", "B".into())));
         assert!(kinds.contains(&("relates-to", "C".into())));
+    }
+
+    #[test]
+    fn promoted_md_stamps_derived_from_provenance() {
+        let md = promoted_belief_md(
+            "b_new", "branch-fact", "repo:proj", "the fact", "body", "2026-01-01T00:00:00.000Z", "b_orig",
+        );
+        assert!(md.contains("derived_from:\n    - b_orig"), "promoted belief must point back at its origin");
+        assert!(!md.contains("derived_from: []"), "the empty derived_from must be replaced");
+        let b = Belief::parse(&md).expect("promoted md parses");
+        assert_eq!(b.scope, "repo:proj");
+        assert_eq!(b.id, "b_new");
     }
 
     #[test]
