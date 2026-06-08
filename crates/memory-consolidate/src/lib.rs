@@ -70,12 +70,22 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    /// The default registry: the two shipped linkers. BYO = push another `Box<dyn Linker>`.
+    /// Write-time registry: cheap, no LLM generation (hint + proximity).
     pub fn with_defaults() -> Orchestrator {
         Orchestrator {
             linkers: vec![
                 Box::new(SupersedeHintLinker),
                 Box::new(ProximityLinker::default()),
+            ],
+        }
+    }
+
+    /// Deep registry for `mem consolidate` (the REM pass): proximity + the LLM judge.
+    pub fn deep() -> Orchestrator {
+        Orchestrator {
+            linkers: vec![
+                Box::new(ProximityLinker::default()),
+                Box::new(JudgmentLinker::from_env()),
             ],
         }
     }
@@ -184,6 +194,100 @@ impl Linker for ProximityLinker {
                 linker: self.id().into(),
             })
             .collect()
+    }
+}
+
+// --- Linker 3: LLM judgment (Mid tier, REM cadence) ------------------------------------
+
+/// Candidate-generation → judgment: embedding-kNN finds candidate neighbors, then an LLM
+/// (qwen2.5) classifies the directed relation A→B. Off the write hot path (REM cadence).
+pub struct JudgmentLinker {
+    pub url: String,
+    pub model: String,
+    pub k: usize,
+    pub min_sim: f32,
+}
+
+impl JudgmentLinker {
+    pub fn from_env() -> JudgmentLinker {
+        JudgmentLinker {
+            url: std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into()),
+            model: std::env::var("JUDGE_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into()),
+            k: 3,
+            min_sim: 0.55,
+        }
+    }
+}
+
+const JUDGE_SYSTEM: &str = "You judge the directed relation from belief A to belief B in a \
+developer's memory, where A is the NEWER belief. Choose exactly one relation: \
+\"supersedes\" = A updates or replaces B, so B is now out of date (e.g. A says \"we now use X\" \
+and B says \"we use Y\" for the same thing); \"refines\" = A adds detail to or narrows B, both \
+still true; \"supports\" = A is independent evidence for B; \"attacks\" = A claims B is factually \
+WRONG (a genuine contradiction, not merely a newer state); \"none\" = unrelated, or merely \
+similar with no logical relation. A change of decision over time is supersedes, NOT attacks. \
+Default to none unless the relation is clear. Reply ONLY with JSON shaped like \
+{\"relation\":\"none\",\"confidence\":\"plausible\",\"rationale\":\"<one short sentence>\"} \
+where confidence is weak, plausible, or strong.";
+
+impl Linker for JudgmentLinker {
+    fn id(&self) -> &str {
+        "judge@1"
+    }
+    fn tier(&self) -> Tier {
+        Tier::Mid
+    }
+    fn cadence(&self) -> Cadence {
+        Cadence::Rem
+    }
+    fn link(&self, ctx: &LinkCtx) -> Vec<LinkProposal> {
+        let Some(nv) = ctx.vectors.get(&ctx.new.id) else {
+            return Vec::new();
+        };
+        let mut cands: Vec<(&Belief, f32)> = ctx
+            .graph
+            .beliefs
+            .iter()
+            .filter(|b| b.id != ctx.new.id && b.relation.is_none())
+            // A (the new/target belief) must be genuinely NEWER than B, so supersedes points
+            // the right way — the judge can't infer recency from text.
+            .filter(|b| b.txn_time < ctx.new.txn_time)
+            .filter_map(|b| ctx.vectors.get(&b.id).map(|v| (b, cosine(nv, v))))
+            .filter(|(_, s)| *s >= self.min_sim)
+            .collect();
+        cands.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        cands.truncate(self.k);
+
+        let mut out = Vec::new();
+        for (b, _) in cands {
+            let user = format!("A: {}\nB: {}", ctx.new.claim, b.claim);
+            let v = match memory_embed::chat_json(&self.url, &self.model, JUDGE_SYSTEM, &user) {
+                Ok(v) => v,
+                Err(_) => continue, // judge unavailable for this pair → skip
+            };
+            let kind = match v.get("relation").and_then(|x| x.as_str()).unwrap_or("none") {
+                "supersedes" => EdgeKind::Supersedes,
+                "refines" => EdgeKind::Refines,
+                "supports" => EdgeKind::Supports,
+                "attacks" => EdgeKind::Attacks,
+                _ => continue, // "none" or unknown → no edge
+            };
+            let conf = match v.get("confidence").and_then(|x| x.as_str()).unwrap_or("plausible") {
+                "strong" => Confidence::Strong,
+                "weak" => Confidence::Weak,
+                _ => Confidence::Plausible,
+            };
+            let rationale = v.get("rationale").and_then(|x| x.as_str()).unwrap_or("");
+            out.push(LinkProposal {
+                kind,
+                subject: ctx.new.id.clone(),
+                object: b.id.clone(),
+                confidence: conf,
+                rationale: format!("judge: {rationale}"),
+                linker: self.id().into(),
+            });
+        }
+        out
     }
 }
 

@@ -113,6 +113,9 @@ pub struct Belief {
     /// "repo:<id>@<branch>" (provisional, branch-local). Recall filters by active scopes;
     /// filtering the subgraph BEFORE resolving the frontier gives branch divergence for free.
     pub scope: String,
+    /// ISO-8601 transaction time (when recorded). Lexically ordered. Lets the judge only
+    /// propose supersedes from the genuinely-newer belief.
+    pub txn_time: String,
 }
 
 impl Belief {
@@ -219,6 +222,11 @@ impl Belief {
                             rel_subj = v.trim().split_whitespace().next().unwrap_or("").to_string();
                         } else if let Some(v) = trimmed.strip_prefix("object:") {
                             rel_obj = v.trim().split_whitespace().next().unwrap_or("").to_string();
+                        }
+                    }
+                    "provenance" => {
+                        if let Some(v) = trimmed.strip_prefix("txn_time:") {
+                            b.txn_time = v.trim().to_string();
                         }
                     }
                     _ => {}
@@ -336,10 +344,9 @@ pub fn content_id(seed: &str) -> String {
 }
 
 pub fn iso_now() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = dur.as_secs();
+    let millis = dur.subsec_millis();
     let z = (secs / 86400) as i64 + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = z - era * 146097;
@@ -351,7 +358,7 @@ pub fn iso_now() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let (y, m, d) = (y + if m <= 2 { 1 } else { 0 }, m, d);
     let sod = secs % 86400;
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", sod / 3600, (sod % 3600) / 60, sod % 60)
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{millis:03}Z", sod / 3600, (sod % 3600) / 60, sod % 60)
 }
 
 /// An in-memory belief graph for one corpus / world `main`.

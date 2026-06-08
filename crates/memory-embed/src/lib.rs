@@ -67,6 +67,49 @@ impl Ollama {
     }
 }
 
+/// One-shot structured chat against an Ollama generation model (e.g. qwen2.5). Forces JSON
+/// output (`format: json`, temperature 0) and returns the parsed object. Used by the judgment
+/// linker. Errors (ollama down, model not pulled, non-JSON) come back as strings.
+pub fn chat_json(url: &str, model: &str, system: &str, user: &str) -> Result<Value, String> {
+    let body = json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user }
+        ],
+        "stream": false,
+        "format": "json",
+        "options": { "temperature": 0 }
+    })
+    .to_string();
+    let mut child = Command::new("curl")
+        .args([
+            "-s", "--max-time", "120", "-X", "POST",
+            &format!("{url}/api/chat"),
+            "-H", "Content-Type: application/json", "--data-binary", "@-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("curl spawn failed: {e}"))?;
+    child.stdin.take().ok_or("no curl stdin")?.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if out.stdout.is_empty() {
+        return Err("empty response — is `ollama serve` running?".into());
+    }
+    let v: Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("bad ollama response: {e}"))?;
+    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+        return Err(format!("ollama error: {err} (try `ollama pull {model}`)"));
+    }
+    let content = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .ok_or("no message.content in chat response")?;
+    serde_json::from_str(content).map_err(|e| format!("judge returned non-JSON ({e}): {content}"))
+}
+
 pub fn load_cache(dir: &Path, model: &str) -> HashMap<String, Vec<f32>> {
     let path = dir.join(".embeddings.json");
     let Ok(text) = std::fs::read_to_string(&path) else {

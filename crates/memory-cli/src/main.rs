@@ -19,11 +19,13 @@ fn main() {
     match args.first().map(|s| s.as_str()) {
         Some("remember") => cmd_remember(&args[1..]),
         Some("recall") => cmd_recall(&args[1..]),
+        Some("consolidate") => cmd_consolidate(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
             eprintln!("usage:");
             eprintln!("  mem remember \"<claim>\" [--supersedes <slug|id>] [--global] [--ref R] [--body B]");
             eprintln!("  mem recall \"<query>\" [--limit N]");
+            eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -156,8 +158,65 @@ fn consolidate(dir: &PathBuf, new_id: &str, scope: &str, hints: &[Hint]) -> usiz
         }
     }
     let ctx = LinkCtx { new, graph: &sg, vectors: &vectors, hints };
-    let proposals = Orchestrator::with_defaults().run(&ctx, &[Cadence::OnWrite, Cadence::Nrem]);
+    // write-time = cheap only (explicit-supersede hint). The LLM judge + proximity run in the
+    // deliberate `mem consolidate` pass, off the write hot path.
+    let proposals = Orchestrator::with_defaults().run(&ctx, &[Cadence::OnWrite]);
     Consolidator::commit(dir, &proposals, scope)
+}
+
+/// `mem consolidate [--limit N]` — the REM pass: embed in-scope beliefs, run proximity + the
+/// LLM judge over the most recent N, and commit the edges they propose.
+fn cmd_consolidate(args: &[String]) {
+    let mut limit = 12usize;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--limit" {
+            limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(12);
+            i += 1;
+        }
+        i += 1;
+    }
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let content: Vec<&Belief> = sg.beliefs.iter().filter(|b| b.relation.is_none()).collect();
+    if content.is_empty() {
+        println!("Nothing to consolidate in scope ({}).", scopes.join(", "));
+        return;
+    }
+
+    // make sure every in-scope content belief has an embedding (candidate generation needs it)
+    let oll = memory_embed::Ollama::from_env();
+    let mut vectors = memory_embed::load_cache(&dir, &oll.model);
+    let need: Vec<&Belief> = content.iter().copied().filter(|b| !vectors.contains_key(&b.id)).collect();
+    if !need.is_empty() {
+        let docs: Vec<String> = need.iter().map(|b| format!("search_document: {}", b.claim)).collect();
+        match oll.embed(&docs) {
+            Ok(vs) => {
+                for (b, v) in need.iter().zip(vs) {
+                    vectors.insert(b.id.clone(), v);
+                }
+                memory_embed::save_cache(&dir, &oll.model, &vectors);
+            }
+            Err(e) => { eprintln!("embedding failed ({e}); can't run candidate generation"); return; }
+        }
+    }
+
+    let judge = std::env::var("JUDGE_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into());
+    let targets: Vec<&Belief> = content.iter().copied().take(limit).collect();
+    eprintln!("consolidating {} belief(s) with judge={judge} ...", targets.len());
+    let orch = Orchestrator::deep();
+    let mut total = 0;
+    for t in &targets {
+        let ctx = LinkCtx { new: t, graph: &sg, vectors: &vectors, hints: &[] };
+        let props = orch.run(&ctx, &[Cadence::Nrem, Cadence::Rem]);
+        total += Consolidator::commit(&dir, &props, belief_scope(t));
+    }
+    println!("consolidated {} belief(s); drew {} new edge(s)", targets.len(), total);
 }
 
 // --- ranking ---------------------------------------------------------------------------
