@@ -276,10 +276,15 @@ fn scoped_graph(g: &Graph, scopes: &[String]) -> Graph {
 // --- belief writing --------------------------------------------------------------------
 
 fn store_dir() -> PathBuf {
-    let dir = std::env::var("MEMORY_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+    // MEMORY_DIR > $XDG_DATA_HOME/agentic-memory/beliefs > ~/.local/share/agentic-memory/beliefs
+    let dir = if let Ok(d) = std::env::var("MEMORY_DIR") {
+        PathBuf::from(d)
+    } else if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        PathBuf::from(xdg).join("agentic-memory/beliefs")
+    } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         PathBuf::from(home).join(".local/share/agentic-memory/beliefs")
-    });
+    };
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
