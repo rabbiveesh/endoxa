@@ -207,7 +207,10 @@ fn cmd_consolidate(args: &[String]) {
     }
 
     let judge = std::env::var("JUDGE_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into());
-    let targets: Vec<&Belief> = content.iter().copied().take(limit).collect();
+    // newest-first: consolidate the most recently remembered beliefs (they're the unlinked ones)
+    let mut targets: Vec<&Belief> = content.iter().copied().collect();
+    targets.sort_by(|a, b| b.txn_time.cmp(&a.txn_time));
+    targets.truncate(limit);
     eprintln!("consolidating {} belief(s) with judge={judge} ...", targets.len());
     let orch = Orchestrator::deep();
     let mut total = 0;

@@ -221,14 +221,21 @@ impl JudgmentLinker {
 
 const JUDGE_SYSTEM: &str = "You judge the directed relation from belief A to belief B in a \
 developer's memory, where A is the NEWER belief. Choose exactly one relation: \
-\"supersedes\" = A updates or replaces B, so B is now out of date (e.g. A says \"we now use X\" \
-and B says \"we use Y\" for the same thing); \"refines\" = A adds detail to or narrows B, both \
+\"supersedes\" = A and B are about the SAME specific point and A is its updated version, so B is \
+now out of date (e.g. A says \"we now use X\" and B says \"we use Y\" for the same thing) — a NEW \
+or additional fact on a related topic is NOT supersedes; \"refines\" = A adds detail to or narrows B, both \
 still true; \"supports\" = A is independent evidence for B; \"attacks\" = A claims B is factually \
 WRONG (a genuine contradiction, not merely a newer state); \"none\" = unrelated, or merely \
 similar with no logical relation. A change of decision over time is supersedes, NOT attacks. \
 Default to none unless the relation is clear. Reply ONLY with JSON shaped like \
 {\"relation\":\"none\",\"confidence\":\"plausible\",\"rationale\":\"<one short sentence>\"} \
 where confidence is weak, plausible, or strong.";
+
+/// Adversarial second pass for proposed supersedes (high stakes — it drops a belief).
+const VERIFY_SYSTEM: &str = "You verify whether belief B is made OBSOLETE by belief A. Answer \
+outdated=true ONLY if A states an updated value for the SAME thing B is about, making B wrong \
+to show now. If they are about different aspects, or both are still true, answer false. Reply \
+JSON {\"outdated\": true|false}";
 
 impl Linker for JudgmentLinker {
     fn id(&self) -> &str {
@@ -259,7 +266,7 @@ impl Linker for JudgmentLinker {
         cands.truncate(self.k);
 
         let mut out = Vec::new();
-        for (b, _) in cands {
+        for (b, sim) in cands {
             let user = format!("A: {}\nB: {}", ctx.new.claim, b.claim);
             let v = match memory_embed::chat_json(&self.url, &self.model, JUDGE_SYSTEM, &user) {
                 Ok(v) => v,
@@ -277,6 +284,25 @@ impl Linker for JudgmentLinker {
                 "weak" => Confidence::Weak,
                 _ => Confidence::Plausible,
             };
+            // Stakes gate: a DEFEATING edge (supersedes) drops a belief from recall, so it must
+            // clear a high bar — strong confidence AND high embedding similarity (a genuine
+            // supersession is the SAME thing, restated; loosely-related newer beliefs are not).
+            // Non-defeating edges (refines/supports/attacks) are harmless and pass freely.
+            if matches!(kind, EdgeKind::Supersedes) && (conf != Confidence::Strong || sim < 0.78) {
+                continue;
+            }
+            // Adversarial verify: a second pointed call must agree B is now obsolete. Catches
+            // the over-eager "same topic, different aspect" supersessions the single judgment misses.
+            if matches!(kind, EdgeKind::Supersedes) {
+                let vu = format!("A: {}\nB: {}", ctx.new.claim, b.claim);
+                let outdated = memory_embed::chat_json(&self.url, &self.model, VERIFY_SYSTEM, &vu)
+                    .ok()
+                    .and_then(|x| x.get("outdated").and_then(|o| o.as_bool()))
+                    .unwrap_or(false);
+                if !outdated {
+                    continue; // verification rejected the supersession
+                }
+            }
             let rationale = v.get("rationale").and_then(|x| x.as_str()).unwrap_or("");
             out.push(LinkProposal {
                 kind,
