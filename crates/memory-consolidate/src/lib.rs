@@ -138,7 +138,9 @@ pub struct ProximityLinker {
 
 impl Default for ProximityLinker {
     fn default() -> Self {
-        ProximityLinker { k: 5, strong: 0.80, plausible: 0.62 }
+        // High threshold + small k: only near-duplicate-strength relations (useful for the
+        // future collapse/dedup semantic). Avoids a dense relates-to mat in coherent stores.
+        ProximityLinker { k: 3, strong: 0.88, plausible: 0.80 }
     }
 }
 
