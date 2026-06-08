@@ -77,6 +77,14 @@ impl EdgeKind {
     pub fn is_defeating(&self) -> bool {
         self.semantic() == Semantic::Defeat
     }
+
+    /// Surfacing-stage subsumption: a "generic" relatedness edge (the proximity linker's
+    /// `relates-to`, or `analogous`) is hidden at recall when a SPECIFIC edge already connects
+    /// the same pair — it only surfaces when it's the sole link. Keeps expand/affordances clean.
+    /// Truth/frontier are untouched; this purely dedupes the displayed set.
+    pub fn is_generic(&self) -> bool {
+        matches!(self, EdgeKind::Other(s) if s == "relates-to" || s == "analogous")
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -135,8 +135,9 @@ fn cmd_recall(args: &[String]) {
     let adj = relation_adjacency(&sg);
     let mut any_expandable = false;
     for (id, slug, claim, score) in &hits {
-        let edges = adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]);
-        let (aff, contested) = affordance_str(edges);
+        let raw = adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]);
+        let edges = collapse(id, raw);
+        let (aff, contested) = affordance_str(&edges);
         if !aff.is_empty() {
             any_expandable = true;
         }
@@ -176,9 +177,10 @@ fn cmd_expand(args: &[String]) {
 
     let defeated = sg.defeated();
     let adj = relation_adjacency(&sg);
-    let rels = adj.get(&id).map(|v| v.as_slice()).unwrap_or(&[]);
+    let raw = adj.get(&id).map(|v| v.as_slice()).unwrap_or(&[]);
+    let rels = collapse(&id, raw);
     let mut printed = 0;
-    for r in rels {
+    for r in &rels {
         let outgoing = r.subject == id;
         let other_id = if outgoing { &r.object } else { &r.subject };
         let Some(nb) = sg.beliefs.iter().find(|b| &b.id == other_id) else { continue };
@@ -194,6 +196,19 @@ fn cmd_expand(args: &[String]) {
     if printed == 0 {
         println!("(no linked context)");
     }
+}
+
+/// Surfacing-stage collapse: drop a generic `relates-to`/`analogous` edge from `anchor` to a
+/// neighbor when a SPECIFIC edge already connects them. Order-preserving (the adjacency is
+/// slug-sorted), so the output stays deterministic / human-reproducible.
+fn collapse(anchor: &str, rels: &[Relation]) -> Vec<Relation> {
+    let neighbor = |r: &Relation| if r.subject == anchor { r.object.clone() } else { r.subject.clone() };
+    let specific: std::collections::HashSet<String> =
+        rels.iter().filter(|r| !r.kind.is_generic()).map(neighbor).collect();
+    rels.iter()
+        .filter(|r| !(r.kind.is_generic() && specific.contains(&neighbor(r))))
+        .cloned()
+        .collect()
 }
 
 /// Index from belief-id → the CURRENT (undefeated) edge-beliefs touching it (as subject or
@@ -488,4 +503,50 @@ fn belief_md(id: &str, slug: &str, scope: &str, claim: &str, refs: &[String], bo
     fm.push_str(if body.is_empty() { "(remembered via mem CLI)" } else { body });
     fm.push('\n');
     fm
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rel(kind: &str, s: &str, o: &str) -> Relation {
+        Relation { kind: EdgeKind::parse(kind), subject: s.into(), object: o.into() }
+    }
+
+    #[test]
+    fn collapse_drops_generic_when_specific_links_same_pair() {
+        let rels = vec![rel("refines", "A", "B"), rel("relates-to", "A", "B")];
+        let out = collapse("A", &rels);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind.as_str(), "refines");
+    }
+
+    #[test]
+    fn collapse_keeps_generic_when_it_is_the_sole_link() {
+        let rels = vec![rel("relates-to", "A", "C")];
+        assert_eq!(collapse("A", &rels).len(), 1);
+    }
+
+    #[test]
+    fn collapse_is_per_neighbor_not_global() {
+        // relates-to→B is subsumed (refines exists); relates-to→C survives (sole link to C)
+        let rels = vec![rel("refines", "A", "B"), rel("relates-to", "A", "B"), rel("relates-to", "A", "C")];
+        let out = collapse("A", &rels);
+        let kinds: Vec<(&str, String)> = out
+            .iter()
+            .map(|r| (r.kind.as_str(), if r.subject == "A" { r.object.clone() } else { r.subject.clone() }))
+            .collect();
+        assert_eq!(kinds.len(), 2);
+        assert!(kinds.contains(&("refines", "B".into())));
+        assert!(kinds.contains(&("relates-to", "C".into())));
+    }
+
+    #[test]
+    fn collapse_handles_incoming_direction() {
+        // anchor is the OBJECT of the specific edge; generic to same neighbor still collapses
+        let rels = vec![rel("refines", "B", "A"), rel("relates-to", "B", "A")];
+        let out = collapse("A", &rels);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind.as_str(), "refines");
+    }
 }
