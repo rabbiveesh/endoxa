@@ -10,7 +10,10 @@
 //! Store: $MEMORY_DIR (default ~/.local/share/agentic-memory/beliefs).
 
 use memory_consolidate::{Consolidator, Orchestrator};
-use memory_core::{content_id, cosine, iso_now, Belief, Cadence, EdgeKind, Graph, Hint, LinkCtx, Relation};
+use memory_core::{
+    content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, Graph, Hint, LinkCtx,
+    LinkProposal, Relation,
+};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -21,6 +24,7 @@ fn main() {
         Some("recall") => cmd_recall(&args[1..]),
         Some("expand") => cmd_expand(&args[1..]),
         Some("ask") => cmd_ask(&args[1..]),
+        Some("forget") => cmd_forget(&args[1..]),
         Some("consolidate") => cmd_consolidate(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
@@ -29,6 +33,7 @@ fn main() {
             eprintln!("  mem recall \"<query>\" [--limit N]");
             eprintln!("  mem expand <slug|id>          # one-hop: show a belief's linked context");
             eprintln!("  mem ask \"<question>\" [--limit N]  # LLM-synthesized grounded answer (opt-in)");
+            eprintln!("  mem forget <slug|id> [--reason R]  # retract a belief: recall drops it (file kept)");
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem scope");
             std::process::exit(2);
@@ -300,6 +305,77 @@ fn cmd_ask(args: &[String]) {
     }
 }
 
+/// `mem forget <slug|id> [--reason R]` — retract a belief so recall stops surfacing it.
+///
+/// Append-only by construction: we NEVER delete the file. We commit a reified `retracts`
+/// edge-belief (a defeating kind, self-anchored: subject == object == target) through the
+/// Consolidator (the sole edge writer). Frontier resolution then drops the target from the
+/// current set — recall/ask no longer surface it — while the belief stays on disk for reliving,
+/// and the retraction is itself defeasible (a later supersedes-of-the-retraction reinstates it).
+/// Written in the target's OWN scope, so a branch-local forget stays branch-local.
+fn cmd_forget(args: &[String]) {
+    let mut reference = String::new();
+    let mut reason = String::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--reason" => { reason = args.get(i + 1).cloned().unwrap_or_default(); i += 1; }
+            s if reference.is_empty() => reference = s.to_string(),
+            _ => {}
+        }
+        i += 1;
+    }
+    if reference.trim().is_empty() {
+        eprintln!("forget needs a <slug|id>");
+        std::process::exit(2);
+    }
+
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let Some(id) = sg.resolve_ref(reference.trim()) else {
+        println!("No belief '{}' in scope ({}).", reference.trim(), scopes.join(", "));
+        return;
+    };
+    let target = sg.beliefs.iter().find(|b| b.id == id).unwrap();
+
+    // Retracting an edge-belief is a different operation (defeat the link); refuse — the
+    // affordance would be misleading, and recall already hides edge-beliefs.
+    if target.relation.is_some() {
+        eprintln!("'{}' is an edge-belief, not a claim — nothing to forget.", target.slug);
+        std::process::exit(2);
+    }
+    let slug = target.slug.clone();
+    let scope = belief_scope(target).to_string();
+
+    // Already off the frontier? Report instead of stacking a redundant retraction.
+    if sg.defeated().contains(&id) {
+        println!("[{slug}] is already retracted (not currently surfaced).");
+        return;
+    }
+
+    let proposal = LinkProposal {
+        kind: EdgeKind::Retracts,
+        subject: id.clone(),
+        object: id.clone(),
+        confidence: Confidence::Strong,
+        rationale: if reason.trim().is_empty() {
+            "mem forget: user retraction (kept on disk, dropped from the frontier)".into()
+        } else {
+            format!("mem forget: {}", reason.trim())
+        },
+        linker: "mem-forget@1".into(),
+    };
+    match Consolidator::commit(&dir, std::slice::from_ref(&proposal), &scope) {
+        0 => println!("[{slug}] was already forgotten (retraction exists)."),
+        _ => println!("forgot [{slug}] in scope={scope} — recall will no longer surface it (file kept for reliving)"),
+    }
+}
+
 /// Surfacing-stage collapse: drop a generic `relates-to`/`analogous` edge from `anchor` to a
 /// neighbor when a SPECIFIC edge already connects them. Order-preserving (the adjacency is
 /// slug-sorted), so the output stays deterministic / human-reproducible.
@@ -324,7 +400,9 @@ fn relation_adjacency(g: &Graph) -> std::collections::HashMap<String, Vec<Relati
             continue; // a defeated edge is no longer in force
         }
         adj.entry(r.subject.clone()).or_default().push(r.clone());
-        adj.entry(r.object.clone()).or_default().push(r.clone());
+        if r.object != r.subject {
+            adj.entry(r.object.clone()).or_default().push(r.clone()); // avoid double-add on self-anchored edges (forget)
+        }
     }
     adj
 }

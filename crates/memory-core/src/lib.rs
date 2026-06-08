@@ -20,6 +20,10 @@ pub enum EdgeKind {
     Supports,
     Attacks,
     Supersedes,
+    /// A deliberate retraction ("forget"): defeats its target with NO replacement claim — the
+    /// distinction from `supersedes` (which means "a newer version of the same thing") matters,
+    /// so `mem forget` doesn't masquerade as an update.
+    Retracts,
     DerivedFrom,
     Refines,
     Adjudicates,
@@ -44,6 +48,7 @@ impl EdgeKind {
             "supports" => EdgeKind::Supports,
             "attacks" => EdgeKind::Attacks,
             "supersedes" => EdgeKind::Supersedes,
+            "retracts" => EdgeKind::Retracts,
             "derived_from" => EdgeKind::DerivedFrom,
             "refines" => EdgeKind::Refines,
             "adjudicates" => EdgeKind::Adjudicates,
@@ -56,6 +61,7 @@ impl EdgeKind {
             EdgeKind::Supports => "supports",
             EdgeKind::Attacks => "attacks",
             EdgeKind::Supersedes => "supersedes",
+            EdgeKind::Retracts => "retracts",
             EdgeKind::DerivedFrom => "derived_from",
             EdgeKind::Refines => "refines",
             EdgeKind::Adjudicates => "adjudicates",
@@ -67,7 +73,7 @@ impl EdgeKind {
     /// `memory-consolidate` / plugins populate when they register a relation type.
     pub fn semantic(&self) -> Semantic {
         match self {
-            EdgeKind::Supersedes | EdgeKind::Adjudicates => Semantic::Defeat,
+            EdgeKind::Supersedes | EdgeKind::Adjudicates | EdgeKind::Retracts => Semantic::Defeat,
             _ => Semantic::Annotate, // supports/refines/attacks/derived_from/Other(..) annotate
         }
     }

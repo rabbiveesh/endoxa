@@ -1,8 +1,48 @@
 //! Frontier-resolution tests against the real corpus — the first green checks that turn
 //! the thesis from a doc into a running thing.
 
-use memory_core::Graph;
+use memory_core::{Belief, EdgeKind, Graph, Relation};
 use std::path::Path;
+
+fn belief(id: &str, slug: &str) -> Belief {
+    Belief { id: id.into(), slug: slug.into(), ..Default::default() }
+}
+
+fn edge(id: &str, kind: EdgeKind, subject: &str, object: &str) -> Belief {
+    Belief {
+        id: id.into(),
+        slug: format!("rel-{id}"),
+        relation: Some(Relation { kind, subject: subject.into(), object: object.into() }),
+        ..Default::default()
+    }
+}
+
+/// `mem forget` writes a self-anchored `retracts` edge; it must defeat its target so recall
+/// drops it (while the file stays on disk — that's the CLI's job, not the resolver's).
+#[test]
+fn retracts_edge_defeats_its_target() {
+    let g = Graph::from_beliefs(vec![
+        belief("t", "target"),
+        edge("r", EdgeKind::Retracts, "t", "t"),
+    ]);
+    assert!(g.defeated().contains("t"), "a retracts edge must defeat its target");
+    let current: Vec<&str> = g.current().iter().map(|b| b.slug.as_str()).collect();
+    assert!(!current.contains(&"target"), "a forgotten belief must not be current");
+}
+
+/// Forget is reversible at the resolver level: defeat the retraction itself and the target
+/// reinstates (the same non-monotonic property supersession relies on).
+#[test]
+fn defeating_a_retraction_reinstates_the_target() {
+    let g = Graph::from_beliefs(vec![
+        belief("t", "target"),
+        edge("r", EdgeKind::Retracts, "t", "t"),
+        edge("u", EdgeKind::Supersedes, "u", "r"), // supersede the retraction edge-belief
+    ]);
+    let defeated = g.defeated();
+    assert!(defeated.contains("r"), "the retraction is itself defeated");
+    assert!(!defeated.contains("t"), "the target reinstates once its retraction is defeated");
+}
 
 fn load(corpus: &str) -> Graph {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
