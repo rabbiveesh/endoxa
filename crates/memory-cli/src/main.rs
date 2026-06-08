@@ -10,7 +10,7 @@
 //! Store: $MEMORY_DIR (default ~/.local/share/agentic-memory/beliefs).
 
 use memory_consolidate::{Consolidator, Orchestrator};
-use memory_core::{content_id, cosine, iso_now, Belief, Cadence, EdgeKind, Graph, Hint, LinkCtx};
+use memory_core::{content_id, cosine, iso_now, Belief, Cadence, EdgeKind, Graph, Hint, LinkCtx, Relation};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -19,12 +19,14 @@ fn main() {
     match args.first().map(|s| s.as_str()) {
         Some("remember") => cmd_remember(&args[1..]),
         Some("recall") => cmd_recall(&args[1..]),
+        Some("expand") => cmd_expand(&args[1..]),
         Some("consolidate") => cmd_consolidate(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
             eprintln!("usage:");
             eprintln!("  mem remember \"<claim>\" [--supersedes <slug|id>] [--global] [--ref R] [--body B]");
             eprintln!("  mem recall \"<query>\" [--limit N]");
+            eprintln!("  mem expand <slug|id>          # one-hop: show a belief's linked context");
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem scope");
             std::process::exit(2);
@@ -128,12 +130,103 @@ fn cmd_recall(args: &[String]) {
         "Recalled {} current belief(s) [{mode}; {dropped} superseded/refuted dropped]:\n",
         hits.len()
     );
-    for (slug, claim, score) in &hits {
+    // Affordances: annotate each hit with its current edge-counts so the robot KNOWS what's
+    // expandable (and can probe with `mem expand`) — we don't walk the graph for it here.
+    let adj = relation_adjacency(&sg);
+    let mut any_expandable = false;
+    for (id, slug, claim, score) in &hits {
+        let edges = adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]);
+        let (aff, contested) = affordance_str(edges);
+        if !aff.is_empty() {
+            any_expandable = true;
+        }
+        let tag = if aff.is_empty() { String::new() } else { format!("   ({aff} → mem expand)") };
+        let warn = if contested { "  ⚠ contested" } else { "" };
         match score {
-            Some(s) => println!("• ({s:.2}) [{slug}] {claim}"),
-            None => println!("• [{slug}] {claim}"),
+            Some(s) => println!("• ({s:.2}) [{slug}] {claim}{tag}{warn}"),
+            None => println!("• [{slug}] {claim}{tag}{warn}"),
         }
     }
+    if any_expandable {
+        println!("\ndrill into linked context: mem expand <slug>");
+    }
+}
+
+/// `mem expand <slug|id>` — one hop. Shows a belief and its CURRENT linked neighbors, grouped by
+/// relation kind + direction. Deterministic (no LLM); the robot drives the graph-walk explicitly,
+/// so the whole exploration stays a replayable command trail (human-reproducible).
+fn cmd_expand(args: &[String]) {
+    let Some(reference) = args.first() else {
+        eprintln!("expand needs a <slug|id>");
+        std::process::exit(2);
+    };
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let Some(id) = sg.resolve_ref(reference) else {
+        println!("No belief '{reference}' in scope ({}).", scopes.join(", "));
+        return;
+    };
+    let target = sg.beliefs.iter().find(|b| b.id == id).unwrap();
+    println!("[{}] {}\n", target.slug, target.claim);
+
+    let defeated = sg.defeated();
+    let adj = relation_adjacency(&sg);
+    let rels = adj.get(&id).map(|v| v.as_slice()).unwrap_or(&[]);
+    let mut printed = 0;
+    for r in rels {
+        let outgoing = r.subject == id;
+        let other_id = if outgoing { &r.object } else { &r.subject };
+        let Some(nb) = sg.beliefs.iter().find(|b| &b.id == other_id) else { continue };
+        let label = if outgoing {
+            format!("{} →", r.kind.as_str())
+        } else {
+            format!("← {}", r.kind.as_str())
+        };
+        let mark = if defeated.contains(&nb.id) { "  [superseded]" } else { "" };
+        println!("  {label:>14}  [{}] {}{}", nb.slug, nb.claim, mark);
+        printed += 1;
+    }
+    if printed == 0 {
+        println!("(no linked context)");
+    }
+}
+
+/// Index from belief-id → the CURRENT (undefeated) edge-beliefs touching it (as subject or
+/// object). Deterministic; powers recall affordances + `mem expand`.
+fn relation_adjacency(g: &Graph) -> std::collections::HashMap<String, Vec<Relation>> {
+    let defeated = g.defeated();
+    let mut adj: std::collections::HashMap<String, Vec<Relation>> = std::collections::HashMap::new();
+    for b in &g.beliefs {
+        let Some(r) = &b.relation else { continue };
+        if defeated.contains(&b.id) {
+            continue; // a defeated edge is no longer in force
+        }
+        adj.entry(r.subject.clone()).or_default().push(r.clone());
+        adj.entry(r.object.clone()).or_default().push(r.clone());
+    }
+    adj
+}
+
+/// Compact affordance string for a belief's edges, e.g. "refines 1 · supports 2", plus a
+/// `contested` flag if any `attacks` touches it.
+fn affordance_str(edges: &[Relation]) -> (String, bool) {
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut contested = false;
+    for r in edges {
+        let k = r.kind.as_str();
+        if k == "attacks" {
+            contested = true;
+        }
+        *counts.entry(k).or_default() += 1;
+    }
+    let parts: Vec<String> = counts.into_iter().map(|(k, n)| format!("{k} {n}")).collect();
+    (parts.join(" · "), contested)
 }
 
 // --- consolidation (on write) ----------------------------------------------------------
@@ -224,7 +317,7 @@ fn cmd_consolidate(args: &[String]) {
 
 // --- ranking ---------------------------------------------------------------------------
 
-type Hit = (String, String, Option<f32>);
+type Hit = (String, String, String, Option<f32>); // (id, slug, claim, score)
 
 /// Semantic rank via embeddings; Err → caller falls back to lexical.
 fn rank(dir: &PathBuf, current: &[&Belief], query: &str) -> Result<Vec<Hit>, String> {
@@ -246,9 +339,11 @@ fn rank(dir: &PathBuf, current: &[&Belief], query: &str) -> Result<Vec<Hit>, Str
         .ok_or("no query embedding")?;
     let mut scored: Vec<Hit> = current
         .iter()
-        .filter_map(|b| cache.get(&b.id).map(|v| (b.slug.clone(), b.claim.clone(), Some(cosine(&qv, v)))))
+        .filter_map(|b| {
+            cache.get(&b.id).map(|v| (b.id.clone(), b.slug.clone(), b.claim.clone(), Some(cosine(&qv, v))))
+        })
         .collect();
-    scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
     Ok(scored)
 }
 
@@ -257,9 +352,9 @@ fn lexical(current: &[&Belief], query: &str) -> Vec<Hit> {
     let mut hits: Vec<Hit> = current
         .iter()
         .filter(|b| b.slug.to_lowercase().contains(&ql) || b.claim.to_lowercase().contains(&ql))
-        .map(|b| (b.slug.clone(), b.claim.clone(), None))
+        .map(|b| (b.id.clone(), b.slug.clone(), b.claim.clone(), None))
         .collect();
-    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    hits.sort_by(|a, b| b.1.cmp(&a.1));
     hits
 }
 
