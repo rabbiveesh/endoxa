@@ -20,6 +20,7 @@ fn main() {
         Some("remember") => cmd_remember(&args[1..]),
         Some("recall") => cmd_recall(&args[1..]),
         Some("expand") => cmd_expand(&args[1..]),
+        Some("ask") => cmd_ask(&args[1..]),
         Some("consolidate") => cmd_consolidate(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
@@ -27,6 +28,7 @@ fn main() {
             eprintln!("  mem remember \"<claim>\" [--supersedes <slug|id>] [--global] [--ref R] [--body B]");
             eprintln!("  mem recall \"<query>\" [--limit N]");
             eprintln!("  mem expand <slug|id>          # one-hop: show a belief's linked context");
+            eprintln!("  mem ask \"<question>\" [--limit N]  # LLM-synthesized grounded answer (opt-in)");
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem scope");
             std::process::exit(2);
@@ -195,6 +197,106 @@ fn cmd_expand(args: &[String]) {
     }
     if printed == 0 {
         println!("(no linked context)");
+    }
+}
+
+/// The grounded-synthesis contract for `mem ask`. Faithfulness over fluency — a robot ACTS on
+/// this, so no invention, conflicts surfaced (not smoothed), gaps stated, beliefs cited.
+const ASK_SYSTEM: &str = "You answer a question using ONLY the supplied beliefs. Never invent \
+facts that aren't in them. Cite the [slug] of every belief you draw on. If the beliefs conflict, \
+surface the conflict — do not silently pick a side. If they don't cover the question, say what's \
+missing in `gaps`. Be concise. Reply JSON: \
+{\"answer\": \"...\", \"cited\": [\"slug\"], \"conflicts\": [\"...\"], \"gaps\": \"...\"}";
+
+/// `mem ask "<question>"` — the OPT-IN LLM reducer. Gathers the frontier-resolved, scope-filtered
+/// top-k beliefs and has qwen synthesize a grounded answer (cited, conflict-honest, gap-explicit).
+/// The ONE place an LLM sits on the read path; `recall` stays deterministic. Degrades to raw
+/// beliefs if Ollama is down — the robot can read them itself.
+fn cmd_ask(args: &[String]) {
+    let mut question = String::new();
+    let mut limit = 8usize;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(8); i += 1; }
+            s if question.is_empty() => question = s.to_string(),
+            s => { question.push(' '); question.push_str(s); }
+        }
+        i += 1;
+    }
+    let question = question.trim().to_string();
+    if question.is_empty() {
+        eprintln!("ask needs a question");
+        std::process::exit(2);
+    }
+
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let defeated = sg.defeated();
+    let current: Vec<&Belief> = sg
+        .beliefs
+        .iter()
+        .filter(|b| !defeated.contains(&b.id) && b.relation.is_none())
+        .collect();
+    if current.is_empty() {
+        println!("No memory in scope ({}).", scopes.join(", "));
+        return;
+    }
+
+    let mut hits = match rank(&dir, &current, &question) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("(no embeddings: {e}; falling back to lexical match)");
+            lexical(&current, &question)
+        }
+    };
+    hits.truncate(limit);
+    if hits.is_empty() {
+        println!("No memory on \"{question}\".");
+        return;
+    }
+
+    let mut ctx = format!("Question: {question}\n\nBeliefs:\n");
+    for (_id, slug, claim, _s) in &hits {
+        ctx.push_str(&format!("- [{slug}] {claim}\n"));
+    }
+
+    let model = std::env::var("ASK_MODEL")
+        .or_else(|_| std::env::var("JUDGE_MODEL"))
+        .unwrap_or_else(|_| "qwen2.5:7b".into());
+    let oll = memory_embed::Ollama::from_env();
+    match memory_embed::chat_json(&oll.url, &model, ASK_SYSTEM, &ctx) {
+        Ok(v) => {
+            let answer = v.get("answer").and_then(|x| x.as_str()).unwrap_or("(no answer)");
+            println!("{answer}\n");
+            if let Some(cited) = v.get("cited").and_then(|x| x.as_array()) {
+                let slugs: Vec<String> =
+                    cited.iter().filter_map(|c| c.as_str()).map(|s| format!("[{}]", s.trim_matches(|c| c == '[' || c == ']'))).collect();
+                if !slugs.is_empty() {
+                    println!("cited: {}", slugs.join(" "));
+                }
+            }
+            if let Some(conf) = v.get("conflicts").and_then(|x| x.as_array()) {
+                for c in conf.iter().filter_map(|c| c.as_str()).filter(|s| !s.trim().is_empty()) {
+                    println!("⚠ conflict: {c}");
+                }
+            }
+            let gaps = v.get("gaps").and_then(|x| x.as_str()).unwrap_or("").trim();
+            if !gaps.is_empty() && gaps.to_lowercase() != "none" {
+                println!("gaps: {gaps}");
+            }
+        }
+        Err(e) => {
+            eprintln!("(synthesis unavailable: {e}; showing the grounded beliefs)");
+            for (_id, slug, claim, _s) in &hits {
+                println!("• [{slug}] {claim}");
+            }
+        }
     }
 }
 
