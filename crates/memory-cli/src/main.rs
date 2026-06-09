@@ -14,8 +14,62 @@ use memory_core::{
     content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, Graph, Hint, LinkCtx,
     LinkProposal, Relation,
 };
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
+
+// --- settings (memory-cli ONLY; layered defaults < file < env via the `config` crate) ---
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct Settings {
+    recall: RecallSettings,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct RecallSettings {
+    /// L1 serendipity: push a cross-domain bridge line after recall hits.
+    bridges: bool,
+}
+
+impl Default for RecallSettings {
+    fn default() -> Self {
+        RecallSettings { bridges: true }
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { recall: RecallSettings::default() }
+    }
+}
+
+/// Layered load (precedence: defaults < file < env), done OFF-THE-SHELF by the `config` crate.
+///  - file: `$XDG_CONFIG_HOME/agentic-memory/config.toml` (fallback `$HOME/.config/...`), optional.
+///  - env: `MEM_RECALL_BRIDGES=false` (prefix MEM, `_` separator, parsed → bool).
+/// On ANY error we degrade to Settings::default().
+fn load_settings() -> Settings {
+    let cfg_path = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg).join("agentic-memory/config.toml")
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        PathBuf::from(home).join(".config/agentic-memory/config.toml")
+    };
+    let built = config::Config::builder()
+        .add_source(config::File::from(cfg_path).required(false))
+        .add_source(
+            config::Environment::with_prefix("MEM")
+                .separator("_")
+                .try_parsing(true),
+        )
+        .build();
+    match built.and_then(|c| c.try_deserialize::<Settings>()) {
+        Ok(s) => s,
+        Err(_) => Settings::default(),
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,7 +86,7 @@ fn main() {
         _ => {
             eprintln!("usage:");
             eprintln!("  mem remember \"<claim>\" [--supersedes <slug|id>] [--global] [--ref R] [--body B]");
-            eprintln!("  mem recall \"<query>\" [--limit N]");
+            eprintln!("  mem recall \"<query>\" [--limit N] [--no-bridges]");
             eprintln!("  mem expand <slug|id>          # one-hop: show a belief's linked context");
             eprintln!("  mem ask \"<question>\" [--limit N]  # LLM-synthesized grounded answer (opt-in)");
             eprintln!("  mem forget <slug|id> [--reason R]  # retract a belief: recall drops it (file kept)");
@@ -93,10 +147,12 @@ fn cmd_remember(args: &[String]) {
 fn cmd_recall(args: &[String]) {
     let mut query = String::new();
     let mut limit = 10usize;
+    let mut no_bridges = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(10); i += 1; }
+            "--no-bridges" => no_bridges = true,
             s if query.is_empty() => query = s.to_string(),
             s => { query.push(' '); query.push_str(s); }
         }
@@ -181,6 +237,43 @@ fn cmd_recall(args: &[String]) {
     }
     if any_expandable {
         println!("\ndrill into linked context: mem expand <slug>");
+    }
+
+    // SERENDIPITY L1 (surfacing-stage, deterministic — no LLM, no resolver touch). Push at most
+    // ONE cross-domain bridge, anchored to a top hit, reading the insight `mem dream` already
+    // authored into the novelty ledger. Walk the top-3 hits in rank order; for the first anchor
+    // with a current `analogous` edge to a still-current belief that HAS a ledger insight, print
+    // the MOST surprising (lowest sim) such bridge. Gated by config + the per-call --no-bridges.
+    let show_bridge = load_settings().recall.bridges && !no_bridges;
+    if show_bridge {
+        let insights = load_bridge_insights(&dir);
+        if !insights.is_empty() {
+            'anchors: for (anchor_id, anchor_slug, _claim, _score) in hits.iter().take(3) {
+                let raw = adj.get(anchor_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                let mut best: Option<(&str, &str, f32)> = None; // (other_slug, insight, sim)
+                for r in raw {
+                    if r.kind != EdgeKind::Other("analogous".into()) {
+                        continue;
+                    }
+                    let other = if &r.subject == anchor_id { &r.object } else { &r.subject };
+                    if other == anchor_id {
+                        continue;
+                    }
+                    let Some(other_b) = sg.beliefs.iter().find(|b| &b.id == other && b.relation.is_none()) else {
+                        continue; // other endpoint must be a still-current content belief
+                    };
+                    let key = novelty_pair_key(anchor_id, other);
+                    let Some((insight, sim)) = insights.get(&key) else { continue };
+                    if best.map(|(_, _, s)| *sim < s).unwrap_or(true) {
+                        best = Some((other_b.slug.as_str(), insight.as_str(), *sim));
+                    }
+                }
+                if let Some((other_slug, insight, _sim)) = best {
+                    println!("\n↯ bridge: [{anchor_slug}] ↔ [{other_slug}] — {insight}");
+                    break 'anchors; // exactly ONE bridge total
+                }
+            }
+        }
     }
 }
 
@@ -858,6 +951,36 @@ fn jget(line: &str, marker: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+/// Read a BARE (unquoted) JSON number after `marker` (e.g. `"sim":` → 0.595). `jget` only reads
+/// quoted strings; this stops at the first `,` or `}` and parses the value.
+fn jget_num(line: &str, marker: &str) -> Option<f32> {
+    let start = line.find(marker)? + marker.len();
+    let rest = &line[start..];
+    let end = rest.find([',', '}']).unwrap_or(rest.len());
+    rest[..end].trim().parse().ok()
+}
+
+/// Bridge insights authored by `mem dream`: pairkey → (insight, sim), only for `bridged:true`
+/// probes that carry a non-empty insight. Keyed by `novelty_pair_key` (belief-id pair).
+fn load_bridge_insights(dir: &PathBuf) -> HashMap<String, (String, f32)> {
+    let mut out = HashMap::new();
+    if let Ok(text) = std::fs::read_to_string(novelty_ledger(dir)) {
+        for line in text.lines() {
+            if !line.contains("\"bridged\":true") {
+                continue;
+            }
+            let (Some(a), Some(b)) = (jget(line, "\"a\":\""), jget(line, "\"b\":\"")) else { continue };
+            let insight = jget(line, "\"insight\":\"").unwrap_or_default();
+            if insight.trim().is_empty() {
+                continue;
+            }
+            let sim = jget_num(line, "\"sim\":").unwrap_or(1.0);
+            out.insert(novelty_pair_key(&a, &b), (insight, sim));
+        }
+    }
+    out
+}
+
 // --- ranking ---------------------------------------------------------------------------
 
 type Hit = (String, String, String, Option<f32>); // (id, slug, claim, score)
@@ -1148,5 +1271,41 @@ mod tests {
 
         // uncontested → empty
         assert_eq!(contest_str("A", &[rel("supports", "B", "A")], &slug_of), "");
+    }
+
+    #[test]
+    fn jget_num_parses_bare_sim_from_a_ledger_line() {
+        let line = r#"{"a":"b_4fa17525cfed","b":"b_d7ccca88b5b1","sim":0.595,"bridged":true,"insight":"Both curate initial conditions.","at":"2026-06-09T06:50:05.662Z"}"#;
+        assert_eq!(jget_num(line, "\"sim\":"), Some(0.595));
+        // quoted-string jget still reads the string fields
+        assert_eq!(jget(line, "\"a\":\""), Some("b_4fa17525cfed".to_string()));
+        // a sim that ends the object (before `}`) still parses
+        let tail = r#"{"x":1,"sim":0.872}"#;
+        assert_eq!(jget_num(tail, "\"sim\":"), Some(0.872));
+        // missing marker → None
+        assert_eq!(jget_num(line, "\"nope\":"), None);
+    }
+
+    /// Mirror the show_bridge resolution in cmd_recall (settings.bridges && !no_bridges) so the
+    /// toggle precedence is pinned: default true; --no-bridges or MEM_RECALL_BRIDGES=false → false.
+    fn show_bridge(bridges_setting: bool, no_bridges_flag: bool) -> bool {
+        bridges_setting && !no_bridges_flag
+    }
+
+    #[test]
+    fn bridge_toggle_defaults_true() {
+        // the default RecallSettings enables bridges, and no flag is set
+        assert!(RecallSettings::default().bridges);
+        assert!(show_bridge(RecallSettings::default().bridges, false));
+    }
+
+    #[test]
+    fn bridge_toggle_suppressed_by_flag_or_env() {
+        // --no-bridges suppresses even when the setting is on
+        assert!(!show_bridge(true, true));
+        // MEM_RECALL_BRIDGES=false (parsed into the setting) suppresses with no flag
+        assert!(!show_bridge(false, false));
+        // both off → off
+        assert!(!show_bridge(false, true));
     }
 }
