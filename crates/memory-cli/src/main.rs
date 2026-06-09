@@ -307,6 +307,13 @@ fn cmd_ask(args: &[String]) {
     }
 }
 
+/// Machine-inferred edge authors whose edges are a REGENERABLE layer (redrawn by an unattended
+/// `mem consolidate`). Hand-vetoing these is fragile under a from-scratch re-link, so `forget`
+/// refuses them; human-authored edges (everything else) are safe to forget.
+fn is_regenerable_edge(author_id: &str) -> bool {
+    matches!(author_id, "judge@1" | "proximity@1")
+}
+
 /// `mem forget <slug|id> [--reason R]` — retract a belief so recall stops surfacing it.
 ///
 /// Append-only by construction: we NEVER delete the file. We commit a reified `retracts`
@@ -345,10 +352,16 @@ fn cmd_forget(args: &[String]) {
     };
     let target = sg.beliefs.iter().find(|b| b.id == id).unwrap();
 
-    // Retracting an edge-belief is a different operation (defeat the link); refuse — the
-    // affordance would be misleading, and recall already hides edge-beliefs.
-    if target.relation.is_some() {
-        eprintln!("'{}' is an edge-belief, not a claim — nothing to forget.", target.slug);
+    // Forgetting an edge-belief is the clean UNDO path (forget a retraction = un-forget; forget a
+    // supersedes = un-supersede). But machine-inferred edges (judge/proximity) are a REGENERABLE
+    // layer — hand-vetoing one is fragile (a from-scratch re-link would redraw it), so refuse those
+    // and point at the cause. Human-authored edges (forget-retractions, --supersedes hints,
+    // promotions) are never redrawn unattended, so forgetting them is safe.
+    if target.relation.is_some() && is_regenerable_edge(&target.author_id) {
+        eprintln!(
+            "'{}' is a machine-inferred edge ({}) — a regenerable layer. Fix the cause (re-link or the content), don't hand-veto it.",
+            target.slug, target.author_id
+        );
         std::process::exit(2);
     }
     let slug = target.slug.clone();

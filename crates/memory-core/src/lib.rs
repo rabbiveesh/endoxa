@@ -116,6 +116,9 @@ pub struct Belief {
     pub claim: String,
     pub project_scope: bool,
     pub author_kind: String,
+    /// Author identity (e.g. a linker id like `judge@1` / `proximity@1`, or `cli`). Lets the
+    /// CLI tell a regenerable machine edge from a human-authored one.
+    pub author_id: String,
     pub directness: String,
     pub source_weight: f32,
     pub asserted: Option<f32>,
@@ -203,6 +206,8 @@ impl Belief {
                     "author" => {
                         if let Some(v) = trimmed.strip_prefix("kind:") {
                             b.author_kind = v.trim().to_string();
+                        } else if let Some(v) = trimmed.strip_prefix("id:") {
+                            b.author_id = v.trim().to_string();
                         }
                     }
                     "confidence" => {
