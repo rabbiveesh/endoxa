@@ -345,6 +345,118 @@ impl Linker for JudgmentLinker {
     }
 }
 
+// === REM / novelty "dream" pass — an OBSERVABILITY ARTIFACT, deliberately NOT in the Orchestrator.
+// Probes the MOST UNRELATED pairs (farthest cosine, no edge path) for a non-obvious bridge, and
+// records EVERY probe — including the non-results ("earned unrelatedness") — so budget isn't
+// re-burned. A rare bridge becomes a non-defeating `analogous` edge; the headline is the BRIDGE
+// RATE (how integrated the knowledge is). Lives behind `mem dream`, not `mem consolidate`.
+
+/// One recorded probe, positive OR negative. The cache of negative results is the whole point.
+pub struct ProbeRecord {
+    pub a: String,
+    pub b: String,
+    pub sim: f32,
+    pub bridged: bool,
+    pub insight: String,
+    pub at: String,
+}
+
+/// Order-independent pair key, so a probe of (A,B) also covers (B,A).
+pub fn novelty_pair_key(a: &str, b: &str) -> String {
+    if a <= b { format!("{a}|{b}") } else { format!("{b}|{a}") }
+}
+
+const NOVELTY_SYSTEM: &str = "Two beliefs A and B from a developer's memory look UNRELATED. Find a \
+NON-OBVIOUS, useful connection: a shared deep principle, a transferable technique, or an analogy \
+that would actually inform one when working on the other. Reject shallow links (same language, \
+both code, both 'about systems'). MOST pairs have NO real connection — say so. Reply ONLY JSON \
+{\"bridge\":true|false,\"insight\":\"<one sentence naming the specific connection, else empty>\"}.";
+
+/// The REM/novelty pass. Probes far pairs; the CLI owns the ledger (negative cache + metric) and
+/// commits the rare bridges through the Consolidator — so this stays a pure proposer.
+pub struct NoveltyDreamer {
+    pub url: String,
+    pub model: String,
+    /// Skip pairs below this cosine — orthogonal embedding junk isn't "deliberately distant".
+    pub floor: f32,
+    /// Probe the K most-distant eligible peers per target belief.
+    pub probes_per_target: usize,
+}
+
+impl NoveltyDreamer {
+    pub fn from_env() -> NoveltyDreamer {
+        NoveltyDreamer {
+            url: std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into()),
+            model: std::env::var("JUDGE_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into()),
+            floor: 0.05,
+            probes_per_target: 3,
+        }
+    }
+
+    /// For each target, probe its most-unrelated peers that are NOT already edge-connected and
+    /// NOT already probed. Returns (bridge proposals, ALL probe records incl. non-results).
+    pub fn dream(
+        &self,
+        targets: &[&Belief],
+        graph: &memory_core::Graph,
+        vectors: &std::collections::HashMap<String, Vec<f32>>,
+        probed: &std::collections::HashSet<String>,
+    ) -> (Vec<LinkProposal>, Vec<ProbeRecord>) {
+        // pairs already joined by any reified edge — a bridged pair isn't "unrelated".
+        let mut connected: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for b in &graph.beliefs {
+            if let Some(r) = &b.relation {
+                connected.insert(novelty_pair_key(&r.subject, &r.object));
+            }
+        }
+        // `seen` = pairs already probed (the persisted ledger PLUS anything probed earlier this
+        // run), so a pair is never probed twice — including from the other endpoint's target.
+        let mut seen = probed.clone();
+        let (mut proposals, mut records) = (Vec::new(), Vec::new());
+        for t in targets {
+            let Some(tv) = vectors.get(&t.id) else { continue };
+            let mut cands: Vec<(&Belief, f32)> = graph
+                .beliefs
+                .iter()
+                .filter(|b| b.id != t.id && b.relation.is_none())
+                .filter(|b| !connected.contains(&novelty_pair_key(&t.id, &b.id)))
+                .filter(|b| !seen.contains(&novelty_pair_key(&t.id, &b.id)))
+                .filter_map(|b| vectors.get(&b.id).map(|v| (b, cosine(tv, v))))
+                .filter(|(_, s)| *s >= self.floor)
+                .collect();
+            // ascending cosine → the MOST unrelated probed first (highest-surprise bridges).
+            cands.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            cands.truncate(self.probes_per_target);
+            for (b, sim) in cands {
+                seen.insert(novelty_pair_key(&t.id, &b.id)); // claim the pair before probing it
+                let user = format!("A: {}\nB: {}", t.claim, b.claim);
+                let v = match memory_embed::chat_json(&self.url, &self.model, NOVELTY_SYSTEM, &user) {
+                    Ok(v) => v,
+                    Err(_) => continue, // judge down for this pair → not recorded; retry next run
+                };
+                let bridged = v.get("bridge").and_then(|x| x.as_bool()).unwrap_or(false);
+                let insight =
+                    v.get("insight").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+                let real = bridged && !insight.is_empty();
+                records.push(ProbeRecord {
+                    a: t.id.clone(), b: b.id.clone(), sim, bridged: real, insight: insight.clone(), at: iso_now(),
+                });
+                if real {
+                    proposals.push(LinkProposal {
+                        kind: EdgeKind::Other("analogous".into()), // generic + Annotate: never defeats
+                        subject: t.id.clone(),
+                        object: b.id.clone(),
+                        confidence: Confidence::Plausible, // speculative by construction
+                        rationale: format!("novelty bridge (sim {sim:.2}): {insight}"),
+                        linker: "novelty@1".into(),
+                    });
+                }
+            }
+        }
+        (proposals, records)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +465,12 @@ mod tests {
 
     fn content(id: &str, slug: &str) -> Belief {
         Belief { id: id.into(), slug: slug.into(), claim: format!("claim {slug}"), ..Belief::default() }
+    }
+
+    #[test]
+    fn novelty_pair_key_is_order_independent() {
+        assert_eq!(novelty_pair_key("a", "b"), novelty_pair_key("b", "a"));
+        assert_ne!(novelty_pair_key("a", "b"), novelty_pair_key("a", "c"));
     }
 
     #[test]

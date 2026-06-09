@@ -9,7 +9,7 @@
 //!
 //! Store: $MEMORY_DIR (default ~/.local/share/agentic-memory/beliefs).
 
-use memory_consolidate::{Consolidator, Orchestrator};
+use memory_consolidate::{novelty_pair_key, Consolidator, NoveltyDreamer, Orchestrator, ProbeRecord};
 use memory_core::{
     content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, Graph, Hint, LinkCtx,
     LinkProposal, Relation,
@@ -27,6 +27,7 @@ fn main() {
         Some("forget") => cmd_forget(&args[1..]),
         Some("promote") => cmd_promote(&args[1..]),
         Some("consolidate") => cmd_consolidate(&args[1..]),
+        Some("dream") => cmd_dream(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
             eprintln!("usage:");
@@ -37,6 +38,7 @@ fn main() {
             eprintln!("  mem forget <slug|id> [--reason R]  # retract a belief: recall drops it (file kept)");
             eprintln!("  mem promote [<branch>] [--dry-run]  # lift a merged branch's beliefs into repo canon");
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
+            eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -666,6 +668,125 @@ fn cmd_consolidate(args: &[String]) {
         total += Consolidator::commit(&dir, &props, belief_scope(t));
     }
     println!("consolidated {} belief(s); drew {} new edge(s)", targets.len(), total);
+}
+
+/// `mem dream [--limit N]` — the REM/novelty pass (an observability artifact, separate from
+/// `mem consolidate`). Probes the most-unrelated pairs for non-obvious bridges, caches every
+/// probe — including non-results — in a JSONL ledger so budget isn't re-burned, commits the rare
+/// bridges as non-defeating `analogous` edges, and reports the BRIDGE RATE.
+fn cmd_dream(args: &[String]) {
+    let mut limit = 8usize;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--limit" {
+            limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(8);
+            i += 1;
+        }
+        i += 1;
+    }
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let content: Vec<&Belief> = sg.beliefs.iter().filter(|b| b.relation.is_none()).collect();
+    if content.len() < 2 {
+        println!("Need at least 2 beliefs in scope to dream.");
+        return;
+    }
+
+    // novelty needs an embedding for every in-scope belief (it's distance-driven).
+    let oll = memory_embed::Ollama::from_env();
+    let mut vectors = memory_embed::load_cache(&dir, &oll.model);
+    let need: Vec<&Belief> = content.iter().copied().filter(|b| !vectors.contains_key(&b.id)).collect();
+    if !need.is_empty() {
+        let docs: Vec<String> = need.iter().map(|b| format!("search_document: {}", b.claim)).collect();
+        match oll.embed(&docs) {
+            Ok(vs) => {
+                for (b, v) in need.iter().zip(vs) {
+                    vectors.insert(b.id.clone(), v);
+                }
+                memory_embed::save_cache(&dir, &oll.model, &vectors);
+            }
+            Err(e) => { eprintln!("embedding failed ({e}); can't dream"); return; }
+        }
+    }
+
+    let (probed, attempts0, bridges0) = load_probes(&dir);
+    // spread coverage: oldest beliefs first (newest get linked by NREM/REM consolidate already).
+    let mut targets: Vec<&Belief> = content.clone();
+    targets.sort_by(|a, b| a.txn_time.cmp(&b.txn_time));
+    targets.truncate(limit);
+
+    eprintln!("dreaming over {} belief(s) ...", targets.len());
+    let dreamer = NoveltyDreamer::from_env();
+    let (props, records) = dreamer.dream(&targets, &sg, &vectors, &probed);
+    append_probes(&dir, &records);
+    let attempts = attempts0 + records.len() as u64;
+    let bridges = bridges0 + records.iter().filter(|r| r.bridged).count() as u64;
+    let drawn = Consolidator::commit(&dir, &props, &write_scope(false));
+
+    let rate = if attempts > 0 { bridges as f32 / attempts as f32 * 100.0 } else { 0.0 };
+    println!("bridge rate: {rate:.1}% ({bridges}/{attempts} far pairs ever bridged)");
+    if drawn > 0 {
+        println!("\n{drawn} new cross-domain bridge(s):");
+        for p in &props {
+            println!("  • {}", p.rationale);
+        }
+    } else {
+        println!("no new bridges this pass ({} probe(s) recorded as earned-unrelated).", records.len());
+    }
+}
+
+// --- novelty ledger (the negative-result cache + bridge-rate counters), JSONL sidecar ----
+
+fn novelty_ledger(dir: &PathBuf) -> PathBuf {
+    dir.join("novelty-probes.jsonl")
+}
+
+/// Load the probed-pair set (for skipping) + cumulative (attempts, bridges) for the metric.
+fn load_probes(dir: &PathBuf) -> (std::collections::HashSet<String>, u64, u64) {
+    let mut set = std::collections::HashSet::new();
+    let (mut attempts, mut bridges) = (0u64, 0u64);
+    if let Ok(text) = std::fs::read_to_string(novelty_ledger(dir)) {
+        for line in text.lines() {
+            if let (Some(a), Some(b)) = (jget(line, "\"a\":\""), jget(line, "\"b\":\"")) {
+                set.insert(novelty_pair_key(&a, &b));
+                attempts += 1;
+                if line.contains("\"bridged\":true") {
+                    bridges += 1;
+                }
+            }
+        }
+    }
+    (set, attempts, bridges)
+}
+
+fn append_probes(dir: &PathBuf, records: &[ProbeRecord]) {
+    if records.is_empty() {
+        return;
+    }
+    let mut buf = String::new();
+    for r in records {
+        let ins = r.insight.replace('\\', " ").replace('"', "'").replace('\n', " ");
+        buf.push_str(&format!(
+            "{{\"a\":\"{}\",\"b\":\"{}\",\"sim\":{:.3},\"bridged\":{},\"insight\":\"{ins}\",\"at\":\"{}\"}}\n",
+            r.a, r.b, r.sim, r.bridged, r.at
+        ));
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(novelty_ledger(dir)) {
+        let _ = f.write_all(buf.as_bytes());
+    }
+}
+
+fn jget(line: &str, marker: &str) -> Option<String> {
+    let start = line.find(marker)? + marker.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 // --- ranking ---------------------------------------------------------------------------
