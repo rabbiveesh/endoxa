@@ -440,33 +440,64 @@ impl Graph {
         }
     }
 
-    /// **Frontier resolution.** Returns the DEFEATED ids on `main`. Frontier-relative and
-    /// non-monotonic (verdict-of-a-verdict reinstates). Honors BOTH inline defeating edges
-    /// (corpus back-compat) and reified `Relation` edge-beliefs, dispatched through the
-    /// `EdgeKind::semantic()` registry so non-defeating kinds (annotations) never affect it.
+    /// **Frontier resolution.** Returns the DEFEATED ids on `main`. Honors BOTH inline defeating
+    /// edges (corpus back-compat) and reified `Relation` edge-beliefs, via `EdgeKind::semantic()`.
+    ///
+    /// Two defeat modes with DIFFERENT monotonicity (the eval caught the bug of conflating them):
+    ///  - `supersedes` is a VERSION CHAIN → **monotonic**. Once a belief is superseded it stays
+    ///    superseded even when its superseder is itself superseded — a newer version (v3) can't
+    ///    revive the oldest (v1). So a belief defeated *by supersession* STILL fires its own
+    ///    `supersedes` edges (the chain keeps biting forward). Only a *verdict* against the
+    ///    superseder un-supersedes it.
+    ///  - `adjudicates`/`retracts` are VERDICTS → **non-monotonic**. A defeated verdict bites
+    ///    nothing, so a verdict-of-a-verdict (or forgetting a retraction) reinstates the original.
+    ///    A belief defeated *by a verdict* fires nothing.
     pub fn defeated(&self) -> HashSet<Id> {
-        let mut defeated: HashSet<Id> = HashSet::new();
+        let mut defeated: HashSet<Id> = HashSet::new(); // all defeated (supersession OR verdict)
+        let mut by_verdict: HashSet<Id> = HashSet::new(); // defeated by a non-monotonic kind
         for _ in 0..(self.beliefs.len() + 5) {
-            let mut next: HashSet<Id> = HashSet::new();
+            let (mut next, mut next_v): (HashSet<Id>, HashSet<Id>) = (HashSet::new(), HashSet::new());
             for b in &self.beliefs {
-                if defeated.contains(&b.id) {
-                    continue; // a defeated belief (or edge-belief) defeats nothing
-                }
-                for e in &b.edges {
-                    if e.kind.is_defeating() && self.by_id.contains_key(&e.target) {
-                        next.insert(e.target.clone());
+                // `supersedes` (monotonic): fires unless this belief was VERDICT-defeated — a
+                // supersession-defeated belief keeps superseding its own targets (chain persists).
+                if !by_verdict.contains(&b.id) {
+                    for e in &b.edges {
+                        if matches!(e.kind, EdgeKind::Supersedes) && self.by_id.contains_key(&e.target) {
+                            next.insert(e.target.clone());
+                        }
+                    }
+                    if let Some(r) = &b.relation {
+                        if matches!(r.kind, EdgeKind::Supersedes) && self.by_id.contains_key(&r.object) {
+                            next.insert(r.object.clone());
+                        }
                     }
                 }
-                if let Some(r) = &b.relation {
-                    if r.kind.is_defeating() && self.by_id.contains_key(&r.object) {
-                        next.insert(r.object.clone());
+                // verdicts (`adjudicates`/`retracts`/any other defeating kind): non-monotonic —
+                // fire only if this belief is fully current.
+                if !defeated.contains(&b.id) {
+                    for e in &b.edges {
+                        if e.kind.is_defeating() && !matches!(e.kind, EdgeKind::Supersedes)
+                            && self.by_id.contains_key(&e.target)
+                        {
+                            next.insert(e.target.clone());
+                            next_v.insert(e.target.clone());
+                        }
+                    }
+                    if let Some(r) = &b.relation {
+                        if r.kind.is_defeating() && !matches!(r.kind, EdgeKind::Supersedes)
+                            && self.by_id.contains_key(&r.object)
+                        {
+                            next.insert(r.object.clone());
+                            next_v.insert(r.object.clone());
+                        }
                     }
                 }
             }
-            if next == defeated {
+            if next == defeated && next_v == by_verdict {
                 return defeated;
             }
             defeated = next;
+            by_verdict = next_v;
         }
         defeated
     }
