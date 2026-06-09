@@ -39,6 +39,10 @@ pub enum Semantic {
     Defeat,
     /// Surfacing-stage default: records a relation, does not change the frontier.
     Annotate,
+    /// Surfacing-stage — subject and object are the SAME proposition; recall shows ONE
+    /// representative and folds the rest behind it. Does NOT touch the frontier — members
+    /// stay current/durable/relivable; only the DISPLAY folds.
+    Collapse,
 }
 
 impl EdgeKind {
@@ -74,6 +78,9 @@ impl EdgeKind {
     pub fn semantic(&self) -> Semantic {
         match self {
             EdgeKind::Supersedes | EdgeKind::Adjudicates | EdgeKind::Retracts => Semantic::Defeat,
+            // `same-as` is the Reducer's duplicate-fold edge: surfacing-stage, NOT a defeat — a
+            // duplicate isn't false, just redundant, so it stays current and only the display folds.
+            EdgeKind::Other(s) if s == "same-as" => Semantic::Collapse,
             _ => Semantic::Annotate, // supports/refines/attacks/derived_from/Other(..) annotate
         }
     }
@@ -82,6 +89,13 @@ impl EdgeKind {
     /// `adjudicates` verdict or a `supersedes` defeats.
     pub fn is_defeating(&self) -> bool {
         self.semantic() == Semantic::Defeat
+    }
+
+    /// Surfacing-stage duplicate fold: this edge marks subject and object as the SAME
+    /// proposition. Recall shows one representative and folds the rest; the frontier is
+    /// untouched (a collapsing edge never defeats — see `defeated()`).
+    pub fn is_collapsing(&self) -> bool {
+        self.semantic() == Semantic::Collapse
     }
 
     /// Surfacing-stage subsumption: a "generic" relatedness edge (the proximity linker's
@@ -462,5 +476,38 @@ impl Graph {
     pub fn current(&self) -> Vec<&Belief> {
         let d = self.defeated();
         self.beliefs.iter().filter(|b| !d.contains(&b.id)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn content(id: &str, slug: &str) -> Belief {
+        Belief { id: id.into(), slug: slug.into(), claim: format!("claim {slug}"), ..Belief::default() }
+    }
+
+    #[test]
+    fn same_as_is_a_collapse_semantic() {
+        let k = EdgeKind::Other("same-as".into());
+        assert_eq!(k.semantic(), Semantic::Collapse);
+        assert!(k.is_collapsing());
+        // and it is NOT a defeat — a duplicate isn't false, just redundant
+        assert!(!k.is_defeating());
+    }
+
+    #[test]
+    fn collapse_does_not_drop_the_folded_member_from_truth() {
+        // a `same-as` edge member→rep must NOT defeat its object: both stay current.
+        let mut edge = content("e_sameas", "rel-sameas");
+        edge.relation = Some(Relation {
+            kind: EdgeKind::Other("same-as".into()),
+            subject: "b_member".into(),
+            object: "b_rep".into(),
+        });
+        let g = Graph::from_beliefs(vec![content("b_member", "member"), content("b_rep", "rep"), edge]);
+        let d = g.defeated();
+        assert!(!d.contains("b_rep"), "same-as must not defeat its object (rep)");
+        assert!(!d.contains("b_member"), "same-as must not defeat its subject (member)");
     }
 }

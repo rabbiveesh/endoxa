@@ -9,7 +9,7 @@
 //!
 //! Store: $MEMORY_DIR (default ~/.local/share/agentic-memory/beliefs).
 
-use memory_consolidate::{novelty_pair_key, Consolidator, NoveltyDreamer, Orchestrator, ProbeRecord};
+use memory_consolidate::{novelty_pair_key, Consolidator, NoveltyDreamer, Orchestrator, ProbeRecord, Reducer};
 use memory_core::{
     content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, Graph, Hint, LinkCtx,
     LinkProposal, Relation,
@@ -81,6 +81,7 @@ fn main() {
         Some("forget") => cmd_forget(&args[1..]),
         Some("promote") => cmd_promote(&args[1..]),
         Some("consolidate") => cmd_consolidate(&args[1..]),
+        Some("reduce") => cmd_reduce(&args[1..]),
         Some("dream") => cmd_dream(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
@@ -92,6 +93,7 @@ fn main() {
             eprintln!("  mem forget <slug|id> [--reason R]  # retract a belief: recall drops it (file kept)");
             eprintln!("  mem promote [<branch>] [--dry-run]  # lift a merged branch's beliefs into repo canon");
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
+            eprintln!("  mem reduce [--dry-run]        # collapse duplicate beliefs: recall folds them behind one rep");
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
             eprintln!("  mem scope");
             std::process::exit(2);
@@ -205,6 +207,33 @@ fn cmd_recall(args: &[String]) {
         }
     }
     hits.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+
+    // DUPLICATE FOLD (surfacing-stage, AFTER ranking, BEFORE truncate). A `same-as` cluster takes
+    // ONE display slot: rewrite each member-hit onto its representative (surface the rep's
+    // slug+claim, keep the BEST score seen for the cluster), then dedup so the cluster occupies a
+    // single row. Frontier/defeated logic is untouched — every member stays current on disk.
+    let (fold, absorbed) = collapse_map(&sg);
+    if !fold.is_empty() {
+        let rep_of = |id: &str| -> String { fold.get(id).cloned().unwrap_or_else(|| id.to_string()) };
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut folded: Vec<Hit> = Vec::with_capacity(hits.len());
+        for (id, slug, claim, score) in hits.into_iter() {
+            let rep = rep_of(&id);
+            if !seen.insert(rep.clone()) {
+                continue; // this cluster already has its one slot (best score wins, kept first)
+            }
+            // surface the representative's slug + claim (fall back to the hit if rep not found)
+            let (rslug, rclaim) = sg
+                .beliefs
+                .iter()
+                .find(|b| b.id == rep)
+                .map(|b| (b.slug.clone(), b.claim.clone()))
+                .unwrap_or((slug, claim));
+            folded.push((rep, rslug, rclaim, score));
+        }
+        hits = folded;
+    }
+
     hits.truncate(limit);
     println!(
         "Recalled {} current belief(s) [{mode}; {dropped} superseded/refuted dropped]:\n",
@@ -230,9 +259,14 @@ fn cmd_recall(args: &[String]) {
         } else {
             String::new()
         };
+        // Duplicate-fold tag: how many members this representative absorbed (surfacing-stage only).
+        let dup = match absorbed.get(id) {
+            Some(n) if *n > 0 => format!("  ⊕{n} dup"),
+            _ => String::new(),
+        };
         match score {
-            Some(s) => println!("• ({s:.2}) [{slug}] {claim}{tag}{warn}"),
-            None => println!("• [{slug}] {claim}{tag}{warn}"),
+            Some(s) => println!("• ({s:.2}) [{slug}] {claim}{tag}{dup}{warn}"),
+            None => println!("• [{slug}] {claim}{tag}{dup}{warn}"),
         }
     }
     if any_expandable {
@@ -680,6 +714,44 @@ fn relation_adjacency(g: &Graph) -> std::collections::HashMap<String, Vec<Relati
     adj
 }
 
+/// Surfacing-stage duplicate fold map: member-id → representative-id, built from CURRENT
+/// (undefeated) `same-as` edges (member→rep). Transitive with a hop guard, so a chain
+/// m → x → rep resolves all the way to the final representative. Truth/frontier are untouched —
+/// this only governs which of a duplicate cluster takes the one display slot at recall. Returns
+/// (map, absorbed_counts) where absorbed_counts[rep] = how many members fold behind it.
+fn collapse_map(g: &Graph) -> (HashMap<String, String>, HashMap<String, usize>) {
+    let defeated = g.defeated();
+    // direct member → rep links from in-force `same-as` edges
+    let mut direct: HashMap<String, String> = HashMap::new();
+    for b in &g.beliefs {
+        let Some(r) = &b.relation else { continue };
+        if defeated.contains(&b.id) || !r.kind.is_collapsing() {
+            continue; // only CURRENT collapse edges fold
+        }
+        if r.subject == r.object {
+            continue; // self-fold is meaningless
+        }
+        direct.insert(r.subject.clone(), r.object.clone()); // member → rep
+    }
+    // resolve each member to its FINAL rep (follow the chain, guarding against cycles / runaway).
+    let mut map: HashMap<String, String> = HashMap::new();
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for member in direct.keys() {
+        let mut cur = member.clone();
+        for _ in 0..(direct.len() + 1) {
+            match direct.get(&cur) {
+                Some(next) if next != &cur => cur = next.clone(),
+                _ => break,
+            }
+        }
+        if &cur != member {
+            map.insert(member.clone(), cur.clone());
+            *counts.entry(cur).or_default() += 1;
+        }
+    }
+    (map, counts)
+}
+
 /// Compact affordance string for a belief's edges, e.g. "refines 1 · supports 2", plus a
 /// `contested` flag if any `attacks` touches it.
 fn affordance_str(edges: &[Relation]) -> (String, bool) {
@@ -830,6 +902,93 @@ fn cmd_consolidate(args: &[String]) {
         total += Consolidator::commit(&dir, &props, belief_scope(t));
     }
     println!("consolidated {} belief(s); drew {} new edge(s)", targets.len(), total);
+}
+
+/// `mem reduce [--dry-run]` — the deterministic duplicate-collapse pass. A SURFACING-stage HIDE,
+/// NOT a frontier defeat: a duplicate isn't false, just redundant, so the `same-as` edges it
+/// commits fold the DISPLAY at recall while every member stays current/durable/relivable. Reuses
+/// the Linker's existing edges (re-gated on embedding similarity) rather than re-clustering; each
+/// fold is committed in the MEMBER's own scope (like forget/promote) so a branch-local duplicate
+/// stays branch-local.
+fn cmd_reduce(args: &[String]) {
+    let mut dry_run = false;
+    for a in args {
+        if a == "--dry-run" {
+            dry_run = true;
+        }
+    }
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let defeated = sg.defeated();
+    let current: Vec<&Belief> =
+        sg.beliefs.iter().filter(|b| !defeated.contains(&b.id) && b.relation.is_none()).collect();
+    if current.len() < 2 {
+        println!("Need at least 2 current beliefs in scope to reduce.");
+        return;
+    }
+
+    // Ensure every current content belief has an embedding to back the re-gate `sim` closure
+    // (the byte-identical-claim signal needs none, but the edge-reuse signal does).
+    let oll = memory_embed::Ollama::from_env();
+    let mut vectors = memory_embed::load_cache(&dir, &oll.model);
+    let need: Vec<&Belief> = current.iter().copied().filter(|b| !vectors.contains_key(&b.id)).collect();
+    if !need.is_empty() {
+        let docs: Vec<String> = need.iter().map(|b| format!("search_document: {}", b.claim)).collect();
+        match oll.embed(&docs) {
+            Ok(vs) => {
+                for (b, v) in need.iter().zip(vs) {
+                    vectors.insert(b.id.clone(), v);
+                }
+                memory_embed::save_cache(&dir, &oll.model, &vectors);
+            }
+            // Degrade gracefully: without embeddings the edge-reuse signal can't re-gate, but the
+            // byte-identical-claim signal still collapses exact duplicates.
+            Err(e) => eprintln!("(no embeddings: {e}; reducing on identical claims only)"),
+        }
+    }
+    let sim = |a: &str, b: &str| -> Option<f32> {
+        match (vectors.get(a), vectors.get(b)) {
+            (Some(va), Some(vb)) => Some(cosine(va, vb)),
+            _ => None,
+        }
+    };
+
+    let proposals = Reducer::default().reduce(&sg, &sim);
+    if proposals.is_empty() {
+        println!("No duplicates to collapse in scope ({}).", scopes.join(", "));
+        return;
+    }
+    let slug_of = |id: &str| sg.beliefs.iter().find(|b| b.id == id).map(|b| b.slug.clone());
+
+    if dry_run {
+        for p in &proposals {
+            let m = slug_of(&p.subject).unwrap_or_else(|| p.subject.clone());
+            let r = slug_of(&p.object).unwrap_or_else(|| p.object.clone());
+            println!("would collapse [{m}] → [{r}]");
+        }
+        println!("dry-run: {} fold(s) would collapse into their representatives.", proposals.len());
+        return;
+    }
+
+    // Commit each fold in the MEMBER's (subject's) own scope, like forget/promote.
+    let mut folded = 0usize;
+    for p in &proposals {
+        let scope = sg
+            .beliefs
+            .iter()
+            .find(|b| b.id == p.subject)
+            .map(|b| belief_scope(b).to_string())
+            .unwrap_or_else(|| "global".into());
+        folded += Consolidator::commit(&dir, std::slice::from_ref(p), &scope);
+    }
+    println!(
+        "collapsed {folded} duplicate(s) into their representative(s) — recall now folds them (files kept; frontier untouched)."
+    );
 }
 
 /// `mem dream [--limit N]` — the REM/novelty pass (an observability artifact, separate from
@@ -1162,6 +1321,55 @@ mod tests {
 
     fn rel(kind: &str, s: &str, o: &str) -> Relation {
         Relation { kind: EdgeKind::parse(kind), subject: s.into(), object: o.into() }
+    }
+
+    fn content_belief(id: &str, slug: &str, claim: &str) -> Belief {
+        Belief { id: id.into(), slug: slug.into(), claim: claim.into(), ..Belief::default() }
+    }
+
+    fn same_as_edge(id: &str, member: &str, rep: &str) -> Belief {
+        Belief {
+            id: id.into(),
+            slug: format!("rel-{id}"),
+            relation: Some(Relation {
+                kind: EdgeKind::Other("same-as".into()),
+                subject: member.into(),
+                object: rep.into(),
+            }),
+            ..Belief::default()
+        }
+    }
+
+    #[test]
+    fn collapse_map_folds_members_onto_rep_with_counts() {
+        // two members fold onto one rep via current `same-as` edges
+        let g = Graph::from_beliefs(vec![
+            content_belief("b_rep", "rep", "the claim"),
+            content_belief("b_m1", "m1", "the claim"),
+            content_belief("b_m2", "m2", "the claim"),
+            same_as_edge("e1", "b_m1", "b_rep"),
+            same_as_edge("e2", "b_m2", "b_rep"),
+        ]);
+        let (map, counts) = collapse_map(&g);
+        assert_eq!(map.get("b_m1"), Some(&"b_rep".to_string()));
+        assert_eq!(map.get("b_m2"), Some(&"b_rep".to_string()));
+        assert_eq!(map.get("b_rep"), None, "the rep is not folded onto anything");
+        assert_eq!(counts.get("b_rep"), Some(&2), "rep absorbed two members");
+    }
+
+    #[test]
+    fn collapse_map_resolves_transitive_chain() {
+        // m → x → rep must resolve m all the way to rep (hop guard, no runaway)
+        let g = Graph::from_beliefs(vec![
+            content_belief("b_rep", "rep", "c"),
+            content_belief("b_x", "x", "c"),
+            content_belief("b_m", "m", "c"),
+            same_as_edge("e1", "b_x", "b_rep"),
+            same_as_edge("e2", "b_m", "b_x"),
+        ]);
+        let (map, _counts) = collapse_map(&g);
+        assert_eq!(map.get("b_m"), Some(&"b_rep".to_string()), "chain resolves to the final rep");
+        assert_eq!(map.get("b_x"), Some(&"b_rep".to_string()));
     }
 
     #[test]

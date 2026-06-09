@@ -8,9 +8,10 @@
 //! Adding a third (BYO) linker is: implement `Linker`, push it into the orchestrator.
 
 use memory_core::{
-    content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, LinkCtx, LinkProposal,
-    Linker, Tier,
+    content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, Graph, LinkCtx,
+    LinkProposal, Linker, Tier,
 };
+use std::collections::HashMap;
 use std::path::Path;
 
 // --- the Consolidator: the only thing that writes edges --------------------------------
@@ -61,6 +62,147 @@ fn relation_belief_md(edge_id: &str, p: &LinkProposal, scope: &str) -> String {
     s.push_str(&p.rationale);
     s.push('\n');
     s
+}
+
+// --- the Reducer: deterministic duplicate-collapse -------------------------------------
+//
+// A SURFACING-stage pass, NOT a frontier defeat: a duplicate isn't false, just redundant, so the
+// `same-as` edge it emits is `Semantic::Collapse` (recall folds the display) and never drops a
+// belief from truth. It does NOT run a fresh all-pairs embedding clustering — it REUSES the
+// Linker's existing edges, re-gating each on `sim >= dup_sim` so a loosened linker can't widen
+// clusters. FEEDBACK GUARD: reads only L0 content beliefs and explicitly skips any `same-as` edge,
+// so it never re-enters its own output.
+
+pub struct Reducer {
+    /// Re-gate threshold: union two edge endpoints only when their similarity meets this bar.
+    pub dup_sim: f32,
+}
+
+impl Default for Reducer {
+    fn default() -> Self {
+        Reducer { dup_sim: 0.94 }
+    }
+}
+
+impl Reducer {
+    /// Cluster L0 content beliefs that are the SAME proposition and emit a `same-as` fold per
+    /// non-representative member (member → rep). `sim(a, b)` returns the pair's similarity (None
+    /// when an embedding is missing — treated as "not similar enough" so the edge is dropped).
+    pub fn reduce(&self, graph: &Graph, sim: &dyn Fn(&str, &str) -> Option<f32>) -> Vec<LinkProposal> {
+        // L0 content beliefs only — never read edge-beliefs (feedback guard).
+        let content: Vec<&Belief> = graph.beliefs.iter().filter(|b| b.relation.is_none()).collect();
+        let mut uf = UnionFind::new(content.iter().map(|b| b.id.clone()));
+
+        // Signal (a): byte-identical trimmed claims merge directly (no similarity gate needed —
+        // identical text IS the same proposition).
+        let mut by_claim: HashMap<&str, &str> = HashMap::new();
+        for b in &content {
+            let claim = b.claim.trim();
+            match by_claim.get(claim) {
+                Some(first) => uf.union(first, &b.id),
+                None => {
+                    by_claim.insert(claim, &b.id);
+                }
+            }
+        }
+
+        // Signal (b): REUSE the Linker's existing edges. A `Supersedes`/`Adjudicates` edge or a
+        // generic relatedness edge (`is_generic`) suggests "same proposition" — but only union when
+        // re-gated by `sim >= dup_sim` (a loosened linker can't widen a duplicate cluster). Skip
+        // `same-as` edges entirely so the Reducer never re-enters its own output.
+        for b in &graph.beliefs {
+            let Some(r) = &b.relation else { continue };
+            if r.kind.is_collapsing() {
+                continue; // feedback guard: don't read our own `same-as` edges
+            }
+            let mergeable = matches!(r.kind, EdgeKind::Supersedes | EdgeKind::Adjudicates) || r.kind.is_generic();
+            if !mergeable {
+                continue;
+            }
+            // both endpoints must be L0 content beliefs we're clustering
+            if !uf.contains(&r.subject) || !uf.contains(&r.object) {
+                continue;
+            }
+            if sim(&r.subject, &r.object).map(|s| s >= self.dup_sim).unwrap_or(false) {
+                uf.union(&r.subject, &r.object);
+            }
+        }
+
+        // Group members by cluster root; representative = lexically-smallest id (deterministic,
+        // idempotent). Emit member → rep folds for every non-rep member.
+        let mut clusters: HashMap<String, Vec<String>> = HashMap::new();
+        for b in &content {
+            let root = uf.find(&b.id);
+            clusters.entry(root).or_default().push(b.id.clone());
+        }
+        let mut out = Vec::new();
+        for members in clusters.values() {
+            if members.len() < 2 {
+                continue;
+            }
+            let rep = members.iter().min().unwrap().clone();
+            let rep_slug = graph
+                .beliefs
+                .iter()
+                .find(|b| b.id == rep)
+                .map(|b| b.slug.clone())
+                .unwrap_or_else(|| rep.clone());
+            for m in members {
+                if *m == rep {
+                    continue;
+                }
+                out.push(LinkProposal {
+                    kind: EdgeKind::Other("same-as".into()),
+                    subject: m.clone(), // member → rep
+                    object: rep.clone(),
+                    confidence: Confidence::Strong,
+                    rationale: format!("reducer: same proposition as [{rep_slug}]"),
+                    linker: "reducer@1".into(),
+                });
+            }
+        }
+        // Deterministic ordering for stable output / idempotent commits.
+        out.sort_by(|a, b| a.subject.cmp(&b.subject).then(a.object.cmp(&b.object)));
+        out
+    }
+}
+
+/// Tiny deterministic union-find over belief ids (path-compression-free; sets are small).
+struct UnionFind {
+    parent: HashMap<String, String>,
+}
+
+impl UnionFind {
+    fn new(ids: impl Iterator<Item = String>) -> UnionFind {
+        let parent = ids.map(|id| (id.clone(), id)).collect();
+        UnionFind { parent }
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.parent.contains_key(id)
+    }
+
+    fn find(&self, id: &str) -> String {
+        let mut cur = id.to_string();
+        while let Some(p) = self.parent.get(&cur) {
+            if p == &cur {
+                break;
+            }
+            cur = p.clone();
+        }
+        cur
+    }
+
+    fn union(&mut self, a: &str, b: &str) {
+        let (ra, rb) = (self.find(a), self.find(b));
+        if ra == rb {
+            return;
+        }
+        // point the lexically-larger root at the smaller — keeps the smallest id the root, which
+        // makes `reduce`'s representative choice consistent with the union-find structure.
+        let (root, child) = if ra < rb { (ra, rb) } else { (rb, ra) };
+        self.parent.insert(child, root);
+    }
 }
 
 // --- the Orchestrator: runs linkers by cadence -----------------------------------------
@@ -502,6 +644,66 @@ mod tests {
         assert!(g2.defeated().contains("b_old"), "old defeated via reified edge-belief");
         assert!(!g2.defeated().contains("b_new"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reducer_folds_byte_identical_claims_member_into_smaller_id_rep() {
+        // two beliefs, same trimmed claim, different ids → one `same-as` fold, member→rep, rep =
+        // the lexically-smaller id. No edges and no embeddings needed (signal (a) alone fires).
+        let mut a = content("b_zzz", "dup-a");
+        let mut b = content("b_aaa", "dup-b");
+        a.claim = "  the same proposition  ".into(); // leading/trailing space → trim must match
+        b.claim = "the same proposition".into();
+        let g = Graph::from_beliefs(vec![a, b]);
+        let sim = |_: &str, _: &str| None; // no similarity needed for identical-claim merge
+
+        let props = Reducer::default().reduce(&g, &sim);
+        assert_eq!(props.len(), 1, "one fold for the duplicate pair");
+        assert_eq!(props[0].kind.as_str(), "same-as");
+        assert!(props[0].kind.is_collapsing(), "the fold edge is a Collapse semantic");
+        assert!(!props[0].kind.is_defeating(), "collapse must never defeat");
+        assert_eq!(props[0].object, "b_aaa", "rep is the lexically-smaller id");
+        assert_eq!(props[0].subject, "b_zzz", "the other is the folded member (member→rep)");
+        assert_eq!(props[0].linker, "reducer@1");
+    }
+
+    #[test]
+    fn reducer_re_gates_linker_edges_on_dup_sim() {
+        // a generic `relates-to` edge joins two DISTINCT-claim beliefs; it only collapses them when
+        // the re-gate similarity clears dup_sim — a loosened linker can't widen the cluster.
+        let mut rel = content("e_rel", "rel-relates");
+        rel.relation = Some(memory_core::Relation {
+            kind: EdgeKind::Other("relates-to".into()),
+            subject: "b_one".into(),
+            object: "b_two".into(),
+        });
+        let g = Graph::from_beliefs(vec![content("b_one", "one"), content("b_two", "two"), rel]);
+
+        // below dup_sim → no fold
+        let low = |_: &str, _: &str| Some(0.90f32);
+        assert!(Reducer::default().reduce(&g, &low).is_empty(), "below dup_sim → no collapse");
+
+        // at/above dup_sim → one fold (member→rep, rep = smaller id b_one)
+        let high = |_: &str, _: &str| Some(0.96f32);
+        let props = Reducer::default().reduce(&g, &high);
+        assert_eq!(props.len(), 1);
+        assert_eq!(props[0].object, "b_one");
+        assert_eq!(props[0].subject, "b_two");
+    }
+
+    #[test]
+    fn reducer_ignores_its_own_same_as_edges() {
+        // feedback guard: a pre-existing `same-as` edge must not feed back into clustering, and the
+        // folded member must not re-emit. Distinct claims, no qualifying edge → no proposals.
+        let mut same = content("e_same", "rel-same");
+        same.relation = Some(memory_core::Relation {
+            kind: EdgeKind::Other("same-as".into()),
+            subject: "b_member".into(),
+            object: "b_rep".into(),
+        });
+        let g = Graph::from_beliefs(vec![content("b_member", "member"), content("b_rep", "rep"), same]);
+        let sim = |_: &str, _: &str| Some(1.0f32);
+        assert!(Reducer::default().reduce(&g, &sim).is_empty(), "reducer must not read its own same-as edges");
     }
 
     #[test]
