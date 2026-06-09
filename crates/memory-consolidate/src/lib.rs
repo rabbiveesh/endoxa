@@ -237,6 +237,14 @@ outdated=true ONLY if A states an updated value for the SAME thing B is about, m
 to show now. If they are about different aspects, or both are still true, answer false. Reply \
 JSON {\"outdated\": true|false}";
 
+/// Adversarial pass for proposed attacks. A false conflict flag is noise, so the judge must
+/// clear a pointed second call before we record a contradiction; otherwise we downgrade to a
+/// plain (non-defeating) relation.
+const ATTACK_VERIFY_SYSTEM: &str = "You verify whether belief A genuinely claims belief B is \
+FACTUALLY WRONG — a real contradiction where both cannot be true at once. A being merely newer, \
+about a different aspect, a stronger or critical opinion, or a design choice is NOT a \
+contradiction. Reply JSON {\"contradicts\": true|false}";
+
 impl Linker for JudgmentLinker {
     fn id(&self) -> &str {
         "judge@1"
@@ -272,7 +280,7 @@ impl Linker for JudgmentLinker {
                 Ok(v) => v,
                 Err(_) => continue, // judge unavailable for this pair → skip
             };
-            let kind = match v.get("relation").and_then(|x| x.as_str()).unwrap_or("none") {
+            let mut kind = match v.get("relation").and_then(|x| x.as_str()).unwrap_or("none") {
                 "supersedes" => EdgeKind::Supersedes,
                 "refines" => EdgeKind::Refines,
                 "supports" => EdgeKind::Supports,
@@ -303,13 +311,33 @@ impl Linker for JudgmentLinker {
                     continue; // verification rejected the supersession
                 }
             }
+            // Adversarial verify for attacks: a false "conflict" is noise. A second pointed call
+            // must agree A genuinely claims B is WRONG; otherwise DOWNGRADE to a non-defeating
+            // relates-to — keep the relation, drop the bogus conflict flag.
+            let mut downgraded = false;
+            if matches!(kind, EdgeKind::Attacks) {
+                let vu = format!("A: {}\nB: {}", ctx.new.claim, b.claim);
+                let contradicts = memory_embed::chat_json(&self.url, &self.model, ATTACK_VERIFY_SYSTEM, &vu)
+                    .ok()
+                    .and_then(|x| x.get("contradicts").and_then(|o| o.as_bool()))
+                    .unwrap_or(false);
+                if !contradicts {
+                    kind = EdgeKind::Other("relates-to".into());
+                    downgraded = true;
+                }
+            }
             let rationale = v.get("rationale").and_then(|x| x.as_str()).unwrap_or("");
+            let rationale = if downgraded {
+                format!("judge: downgraded attacks→relates-to (no real contradiction): {rationale}")
+            } else {
+                format!("judge: {rationale}")
+            };
             out.push(LinkProposal {
                 kind,
                 subject: ctx.new.id.clone(),
                 object: b.id.clone(),
                 confidence: conf,
-                rationale: format!("judge: {rationale}"),
+                rationale,
                 linker: self.id().into(),
             });
         }
