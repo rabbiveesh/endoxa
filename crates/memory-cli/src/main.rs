@@ -136,6 +136,19 @@ fn cmd_recall(args: &[String]) {
         println!("Nothing current recalled for \"{query}\".");
         return;
     }
+    // Current-edge index (drives both the corroboration boost and the affordances below).
+    let adj = relation_adjacency(&sg);
+    // BOOST (surfacing-stage): lift well-corroborated hits by their incoming `supports` count.
+    // A gentle, capped, multiplicative nudge on the cosine score — re-rank BEFORE we truncate so
+    // the boost can pull a well-supported near-tie into the top-N, but never leapfrog a clearly
+    // nearer hit. Lexical fallback (None scores) is left untouched. Truth is unchanged.
+    for (id, _slug, _claim, score) in hits.iter_mut() {
+        if let Some(s) = score {
+            let raw = adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]);
+            *s *= support_boost(incoming_supports(id, raw));
+        }
+    }
+    hits.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
     hits.truncate(limit);
     println!(
         "Recalled {} current belief(s) [{mode}; {dropped} superseded/refuted dropped]:\n",
@@ -143,7 +156,7 @@ fn cmd_recall(args: &[String]) {
     );
     // Affordances: annotate each hit with its current edge-counts so the robot KNOWS what's
     // expandable (and can probe with `mem expand`) — we don't walk the graph for it here.
-    let adj = relation_adjacency(&sg);
+    let slug_of = |id: &str| sg.beliefs.iter().find(|b| b.id == id).map(|b| b.slug.clone());
     let mut any_expandable = false;
     for (id, slug, claim, score) in &hits {
         let raw = adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -153,7 +166,14 @@ fn cmd_recall(args: &[String]) {
             any_expandable = true;
         }
         let tag = if aff.is_empty() { String::new() } else { format!("   ({aff} → mem expand)") };
-        let warn = if contested { "  ⚠ contested" } else { "" };
+        // Name what it conflicts with (the other endpoint of the attacks edge), falling back to a
+        // bare flag if we somehow can't resolve a slug.
+        let warn = if contested {
+            let named = contest_str(id, &edges, &slug_of);
+            if named.is_empty() { "  ⚠ contested".to_string() } else { format!("  ⚠ {named}") }
+        } else {
+            String::new()
+        };
         match score {
             Some(s) => println!("• ({s:.2}) [{slug}] {claim}{tag}{warn}"),
             None => println!("• [{slug}] {claim}{tag}{warn}"),
@@ -582,6 +602,55 @@ fn affordance_str(edges: &[Relation]) -> (String, bool) {
     }
     let parts: Vec<String> = counts.into_iter().map(|(k, n)| format!("{k} {n}")).collect();
     (parts.join(" · "), contested)
+}
+
+/// SURFACING-STAGE boost. Count of *current* incoming `supports` edges (object == anchor) — i.e.
+/// how many undefeated beliefs corroborate this one. Entrenchment, not a self-rated confidence
+/// field: "there is no gold, only entrenchment". Only `supports` (not refines/derived_from) counts.
+fn incoming_supports(anchor: &str, edges: &[Relation]) -> usize {
+    edges
+        .iter()
+        .filter(|r| r.kind == EdgeKind::Supports && r.object == anchor)
+        .count()
+}
+
+/// Capped, saturating, MULTIPLICATIVE corroboration nudge for the cosine score. Returns a factor
+/// in [1.0, 1.0+SUPPORT_BOOST_CAP] that grows with the count of incoming `supports` but never lets
+/// a far-but-supported belief leapfrog a clearly-nearer one — semantic similarity stays dominant.
+/// Saturates: 1 supporter buys most of the lift, each extra supporter buys diminishingly less.
+fn support_boost(n_supports: usize) -> f32 {
+    const SUPPORT_BOOST_CAP: f32 = 0.12; // ≤12% — a gentle tie-breaker, not a re-ranking
+    if n_supports == 0 {
+        return 1.0;
+    }
+    // 1 - 1/(1+n): 0.50 @1, 0.67 @2, 0.75 @3, 0.80 @4 … → 1.0 as n→∞. Saturating by construction.
+    let saturating = 1.0 - 1.0 / (1.0 + n_supports as f32);
+    1.0 + SUPPORT_BOOST_CAP * saturating
+}
+
+/// Name what a hit conflicts with: the slug(s) on the other endpoint of any current `attacks` edge
+/// touching it. Deterministic. Returns e.g. "contested by [other-slug]" (or "" if uncontested).
+fn contest_str(anchor: &str, edges: &[Relation], slug_of: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut others: Vec<String> = Vec::new();
+    for r in edges {
+        if r.kind != EdgeKind::Attacks {
+            continue;
+        }
+        let other = if r.subject == anchor { &r.object } else { &r.subject };
+        if other == anchor {
+            continue; // self-anchored, nothing to name
+        }
+        if let Some(s) = slug_of(other) {
+            if !others.contains(&s) {
+                others.push(s);
+            }
+        }
+    }
+    if others.is_empty() {
+        return String::new();
+    }
+    let named: Vec<String> = others.iter().map(|s| format!("[{s}]")).collect();
+    format!("contested by {}", named.join(", "))
 }
 
 // --- consolidation (on write) ----------------------------------------------------------
@@ -1019,5 +1088,65 @@ mod tests {
         let out = collapse("A", &rels);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind.as_str(), "refines");
+    }
+
+    #[test]
+    fn incoming_supports_counts_only_incoming_supports() {
+        let rels = vec![
+            rel("supports", "S1", "A"),   // incoming support → counts
+            rel("supports", "S2", "A"),   // incoming support → counts
+            rel("supports", "A", "X"),    // OUTGOING support → does not count
+            rel("refines", "R", "A"),     // wrong kind → does not count
+            rel("attacks", "K", "A"),     // wrong kind → does not count
+        ];
+        assert_eq!(incoming_supports("A", &rels), 2);
+        assert_eq!(incoming_supports("X", &[rel("supports", "A", "X")]), 1);
+    }
+
+    #[test]
+    fn more_incoming_supports_yields_higher_boost() {
+        // monotone non-decreasing, strictly higher for more corroboration, and capped+saturating
+        let b0 = support_boost(0);
+        let b1 = support_boost(1);
+        let b2 = support_boost(2);
+        let b5 = support_boost(5);
+        assert_eq!(b0, 1.0, "no supporters → no boost");
+        assert!(b1 > b0 && b2 > b1 && b5 > b2, "more supporters ⇒ strictly higher boost");
+        // capped: never more than ~12% even with absurd corroboration
+        assert!(support_boost(10_000) <= 1.12 + 1e-6, "boost is capped");
+        // saturating: the first supporter buys more than the gap from 4→5
+        assert!((b1 - b0) > (support_boost(5) - support_boost(4)), "boost saturates");
+    }
+
+    #[test]
+    fn nearer_hit_still_outranks_far_but_supported_one() {
+        // A clearly-nearer belief (cosine 0.80, no support) must beat a far one (0.62) even when
+        // the far one is heavily corroborated — similarity stays dominant.
+        let near = 0.80f32 * support_boost(0);
+        let far_supported = 0.62f32 * support_boost(50);
+        assert!(near > far_supported, "boost must not let a far belief leapfrog a clearly nearer one");
+
+        // But it DOES break a near-tie: 0.70 with 3 supporters beats a bare 0.70.
+        let tie_a = 0.70f32 * support_boost(3);
+        let tie_b = 0.70f32 * support_boost(0);
+        assert!(tie_a > tie_b, "corroboration breaks a near-tie");
+    }
+
+    #[test]
+    fn contest_str_names_the_other_endpoint() {
+        let slug_of = |id: &str| match id {
+            "B" => Some("rival-belief".to_string()),
+            "C" => Some("other-rival".to_string()),
+            _ => None,
+        };
+        // anchor A is attacked-by B (A is object) and attacks C (A is subject); both name the other end
+        let edges = vec![rel("attacks", "B", "A"), rel("attacks", "A", "C")];
+        let s = contest_str("A", &edges, &slug_of);
+        assert!(s.contains("[rival-belief]"), "names the attacker: {s}");
+        assert!(s.contains("[other-rival]"), "names the attacked: {s}");
+        assert!(s.starts_with("contested by "), "{s}");
+
+        // uncontested → empty
+        assert_eq!(contest_str("A", &[rel("supports", "B", "A")], &slug_of), "");
     }
 }
