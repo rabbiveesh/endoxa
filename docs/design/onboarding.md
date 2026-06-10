@@ -110,3 +110,33 @@ The harness is the apparatus for the decisive experiment: onboarded memory vs an
 `/init`-style CLAUDE.md vs raw, on tasks requiring the out-of-band facts. Tier-0
 leads escalated through tier 1–2 produce the onboarded corpus; the existing 3-way
 methodology does the rest.
+
+### First A/B (2026-06-10, private-crm, n=1)
+
+36 tier-1 beliefs committed into repo canon. Task (same prompt both arms, read-only
+design exercise): a by-day repeat-purchase dashboard report over 6 months with
+per-customer streaks — booby-trapped with harvested canon: the 6-month ask collides
+with a learned 3-month by-day cap; the streak SQL invites a window-function bug the
+team already paid for (`lag` reads the whole partition; use `last ... exclude current
+row`). Arm M = multi-query `mem recall`; arm R = identical but barred from `mem`.
+
+| rubric item | M (memory) | R (raw) |
+|---|---|---|
+| 3-month by-day cap flagged | **yes** — recall hit → found the enforcing `ReasonableTimePeriod` type in code | **missed** |
+| `lag` trap avoided | yes (recall + reuse advice) | yes — re-mined from git, citing the same commit |
+| refund/discount-drift reconciliation | yes (recall) | no |
+| metrics rollups can't serve it (no customer dim, once-daily) | yes (recall) | not addressed |
+| codebase grounding | excellent | excellent, deeper in places (buyer-hash identity, tz cast) |
+| cost | 49k tok, 40 tools, 8.2 min | 61k tok, 58 tools, 12.6 min |
+
+Findings beyond the score:
+1. **Tier-0 knowledge is technically in-band** — it all lives in git history, and a
+   diligent raw agent re-mined the code-local lesson (the `lag` commit) the expensive
+   way (+25% tokens, +50% wall-clock). Memory's edge is *direction*, not exclusivity.
+2. **The miss pattern matches the prior 3-ways**: R recovered pitfalls adjacent to
+   the code it read, but missed the cross-cutting *policy* constraint (the 3-month
+   cap lives in a Types module far from the report code). Zero-footprint /
+   policy-shaped knowledge is where memory keeps winning.
+3. **Memory acts as an index into the code**: the recall hit ("backend reports are
+   limited to three months") is what sent M to the enforcing type — the belief
+   didn't replace code reading, it aimed it.
