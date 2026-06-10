@@ -104,6 +104,26 @@ Division of labor that emerges: **tier 0 owns recall, tier 1 owns translation, t
 gate stays human (or tier 2)** — precision comes from selection (what gets escalated),
 not from prompting a small judge harder.
 
+### Verified dry run (robot-game, 2026-06-10): the failure mode is staleness, not hallucination
+
+First fully-verified tier-0+1 pass (175 commits → 54 leads → 31 drafts, every claim
+checked against its evidence AND against HEAD):
+
+- **Faithfulness ~100%**: 31/31 claims trace to their evidence; zero fabrications.
+  The full-commit-message context fetch is what makes the 7B reliable (e.g. it pulled
+  "stops as soon as placement converges" from the body, beyond the lead's excerpt).
+- **Currency 68%**: 21/31 commit-worthy; 10/31 stale — and ALL ten share one cause:
+  a mid-history rewrite (the Macroquad migration deleted every JS-era mechanism the
+  March commits describe). The harvester even drafted the rewrite itself as a claim
+  and still didn't apply it to the older claims it invalidates.
+- Tier-0 report noise is structural, not content: doc-pointer leads were 43% of the
+  report; rationale leads were clean.
+
+Implication: tier 1's missing piece is exactly the system's own machinery. Staleness
+shouldn't drop claims — claims from pre-rewrite commits should land with `valid_time`
+ended and a `supersedes` edge from the rewrite-event belief, letting the frontier do
+its job. Cheapest interim: a HEAD-verification gate before `--commit`.
+
 ## Eval hook
 
 The harness is the apparatus for the decisive experiment: onboarded memory vs an
