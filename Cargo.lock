@@ -293,6 +293,10 @@ dependencies = [
 [[package]]
 name = "memory-onboard"
 version = "0.1.0"
+dependencies = [
+ "memory-embed",
+ "serde_json",
+]
 
 [[package]]
 name = "minimal-lexical"

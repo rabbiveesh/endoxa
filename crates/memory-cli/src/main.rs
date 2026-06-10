@@ -96,7 +96,7 @@ fn main() {
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem reduce [--dry-run]        # collapse duplicate beliefs: recall folds them behind one rep");
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
-            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N]  # tier-0 harvest: git history → belief leads");
+            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N]  # tier-0 lead harvest; tier-1 claim drafts");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -1070,6 +1070,7 @@ fn cmd_onboard(args: &[String]) {
     let mut repo = PathBuf::from(".");
     let mut out: Option<PathBuf> = None;
     let mut top = 25usize;
+    let mut escalate = 0usize;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1079,6 +1080,10 @@ fn cmd_onboard(args: &[String]) {
             }
             "--top" => {
                 top = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(25);
+                i += 1;
+            }
+            "--escalate" => {
+                escalate = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(30);
                 i += 1;
             }
             a if !a.starts_with("--") => repo = PathBuf::from(a),
@@ -1123,6 +1128,40 @@ fn cmd_onboard(args: &[String]) {
     );
     println!("report: {}", md_path.display());
     println!("full:   {}", json_path.display());
+
+    // tier 1 (opt-in): the judge model drafts a claim per selected lead, or rejects it as noise
+    if escalate > 0 {
+        let url = std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into());
+        let model = std::env::var("JUDGE_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into());
+        let picked = memory_onboard::select_for_escalation(&h.leads, escalate);
+        eprintln!("escalating {} lead(s) through {model} ...", picked.len());
+        let mut drafts = Vec::new();
+        let mut failed = 0;
+        for (i, lead) in picked.iter().enumerate() {
+            match memory_onboard::escalate_lead(&repo, lead, &url, &model) {
+                Ok(d) => drafts.push(d),
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("  lead {} failed: {e}", i + 1);
+                }
+            }
+            eprint!("\r  {}/{}", i + 1, picked.len());
+        }
+        eprintln!();
+        let kept = drafts.iter().filter(|d| d.keep && !d.claim.is_empty()).count();
+        let dj = out_dir.join("drafts.json");
+        let dm = out_dir.join("drafts.md");
+        let _ = std::fs::write(&dj, memory_onboard::drafts_json(&h.repo_id, &model, &drafts));
+        let _ = std::fs::write(&dm, memory_onboard::drafts_md(&h.repo_id, &model, &drafts));
+        println!(
+            "tier 1: {} drafted, {} kept, {} rejected as noise{}",
+            drafts.len(),
+            kept,
+            drafts.len() - kept,
+            if failed > 0 { format!(", {failed} failed") } else { String::new() }
+        );
+        println!("drafts: {}", dm.display());
+    }
 }
 
 // --- novelty ledger (the negative-result cache + bridge-rate counters), JSONL sidecar ----

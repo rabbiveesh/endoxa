@@ -581,6 +581,194 @@ pub fn leads_md(h: &Harvest, per_kind: usize) -> String {
     s
 }
 
+// === TIER 1: cheap-model escalation — lead → draft belief ====================================
+//
+// Tier 1 adds the judgment tier 0 refused to have: a local model (JUDGE_MODEL, same harness as
+// the judgment linker) reads each selected lead PLUS richer deterministic context (the full
+// commit message; the code around a debt comment) and either drafts a crisp, standalone claim
+// or rejects the lead as noise. Drafts are still NOT beliefs — they go to drafts.{json,md} for
+// the eyeball pass; committing survivors into the store is a separate, later step.
+
+#[derive(Debug, Clone)]
+pub struct Draft {
+    pub lead: Lead,
+    pub keep: bool,
+    pub claim: String,
+    /// One line on what in the evidence supports the claim (becomes the belief body later).
+    pub why: String,
+    /// decision | supersession | debt | episode — the model's read of the claim's shape.
+    pub shape: String,
+    pub asserted: f32,
+}
+
+/// Pick `limit` leads worth an LLM call: doc pointers excluded (they're tier-2 reading
+/// targets, not single-claim evidence), debt deduped to ONE lead per file (a kludge cluster
+/// is one belief, not five), and an equal quota per kind-group so high-scoring debt can't
+/// starve rationale (leftover capacity spills over by score).
+pub fn select_for_escalation(leads: &[Lead], limit: usize) -> Vec<Lead> {
+    let mut groups: [Vec<&Lead>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let mut debt_seen_files = std::collections::HashSet::new();
+    for l in leads {
+        match l.kind {
+            LeadKind::Revert | LeadKind::Reinstate => groups[0].push(l),
+            LeadKind::Rationale => groups[1].push(l),
+            LeadKind::Debt => {
+                // TODO leads never escalate: a TODO is an aspiration, and the 7B judge reliably
+                // rephrases it as a normative claim ("the script must...") no matter the prompt.
+                // The deficiency tags (HACK/kludge/workaround/FIXME) are where real debt lives.
+                if l.title.starts_with("TODO") {
+                    continue;
+                }
+                let file = l.refs.first().map(|r| r.rsplit_once(':').map_or(r.as_str(), |(f, _)| f));
+                if debt_seen_files.insert(file.unwrap_or("").to_string()) {
+                    groups[2].push(l);
+                }
+            }
+            LeadKind::Doc => {}
+        }
+    }
+    // harvest() already sorted by score desc — group order inherits it
+    let quota = limit.div_ceil(3);
+    let mut picked: Vec<Lead> = Vec::new();
+    let mut leftovers: Vec<&Lead> = Vec::new();
+    for g in &groups {
+        picked.extend(g.iter().take(quota).map(|l| (*l).clone()));
+        leftovers.extend(g.iter().skip(quota));
+    }
+    leftovers.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    for l in leftovers {
+        if picked.len() >= limit {
+            break;
+        }
+        picked.push(l.clone());
+    }
+    picked.truncate(limit);
+    picked
+}
+
+/// Richer deterministic context for one lead: the full commit message (git refs) and/or
+/// the tracked code around a debt comment. Capped — qwen reads it all in one call.
+pub fn lead_context(repo: &Path, lead: &Lead) -> String {
+    let mut ctx = String::new();
+    for r in &lead.refs {
+        if let Some(sha) = r.strip_prefix("git:") {
+            if let Some(msg) = git(repo, &["show", "-s", "--format=%B", sha]) {
+                ctx.push_str(&format!("--- full message of {r} ---\n{}\n", truncated(msg.trim(), 2500)));
+            }
+        } else if let Some((file, ln)) = r.rsplit_once(':') {
+            if let (Ok(ln), Some(content)) = (ln.parse::<usize>(), git(repo, &["show", &format!("HEAD:{file}")])) {
+                let lines: Vec<&str> = content.lines().collect();
+                let lo = ln.saturating_sub(9);
+                let hi = (ln + 8).min(lines.len());
+                ctx.push_str(&format!("--- {file} lines {}..{hi} ---\n", lo + 1));
+                for (i, line) in lines[lo..hi].iter().enumerate() {
+                    ctx.push_str(&format!("{:>5} {}\n", lo + i + 1, truncated(line, 160)));
+                }
+            }
+        }
+    }
+    ctx
+}
+
+const ESCALATE_SYSTEM: &str = "You escalate a TIER-0 LEAD mined from a repo's git history into \
+a candidate BELIEF for an engineer's long-term memory. The evidence is usually a change \
+description (commit message, code comment) — your job is to EXTRACT the durable knowledge it \
+reveals: a design decision and its rationale, a constraint discovered the hard way, a known \
+kludge and what forces it, or a supersession (X replaced Y because Z). Write the claim as ONE \
+crisp, STANDALONE proposition (1-2 sentences) a future engineer must know — not a change \
+summary ('Added feature X'), but the decision/constraint behind it. Rules: ground the claim \
+ONLY in the evidence, never invent specifics; name the module/system (never 'this commit'); \
+carry the WHY inside the claim when the evidence states one; present tense for current state, \
+past tense for episodes. If the evidence is a multi-bullet squash message, extract the SINGLE \
+most durable decision and pair it with ITS OWN why — never stitch a claim from one bullet to a \
+why from another. A TODO describing unimplemented work is an aspiration, not knowledge: \
+keep=false unless it reveals a real present-day constraint or wrongness (e.g. 'X is incorrect \
+because Y'). keep=true whenever something durable can be extracted — most rationale-bearing \
+evidence qualifies. keep=false ONLY for genuine noise: meta-mentions of TODO/HACK as mere \
+strings, test fixtures asserting on such strings, vendored third-party code, or content-free \
+messages. Reply ONLY JSON: {\"keep\":bool,\"claim\":\"1-2 sentences\",\
+\"why\":\"one line on what in the evidence supports it\",\"kind\":\"decision|supersession|\
+debt|episode\",\"confidence\":0.0-1.0}";
+
+/// Kind-specific extraction hint appended to the user prompt — a 7B model does noticeably
+/// better told WHAT SHAPE of claim this lead usually yields.
+fn shape_hint(kind: LeadKind) -> &'static str {
+    match kind {
+        LeadKind::Revert => "hint: state what was tried and backed out, and why if stated.",
+        LeadKind::Reinstate => "hint: state what was un-reverted/reinstated and what that settled.",
+        LeadKind::Rationale => "hint: state the decision AND its why (the 'because/instead of/b\\c' part).",
+        LeadKind::Debt => "hint: state the kludge/limitation, where it lives, and the constraint forcing it.",
+        LeadKind::Doc => "hint: state what this document governs.",
+    }
+}
+
+/// One lead → one model call → one draft. Errors are strings (ollama down, non-JSON).
+pub fn escalate_lead(repo: &Path, lead: &Lead, url: &str, model: &str) -> Result<Draft, String> {
+    let user = format!(
+        "LEAD kind={} date={} refs={}\ntitle: {}\n{}\nevidence:\n{}\n\ncontext:\n{}",
+        lead.kind.as_str(),
+        lead.date,
+        lead.refs.join(" "),
+        lead.title,
+        shape_hint(lead.kind),
+        lead.evidence,
+        lead_context(repo, lead),
+    );
+    let v = memory_embed::chat_json(url, model, ESCALATE_SYSTEM, &user)?;
+    let claim = v.get("claim").and_then(|c| c.as_str()).unwrap_or("").trim().to_string();
+    // degenerate-output gate: a truncated/fragment "claim" is worse than a rejection
+    let keep = v.get("keep").and_then(|k| k.as_bool()).unwrap_or(false) && claim.len() >= 30;
+    Ok(Draft {
+        lead: lead.clone(),
+        keep,
+        claim,
+        why: v.get("why").and_then(|w| w.as_str()).unwrap_or("").trim().to_string(),
+        shape: v.get("kind").and_then(|k| k.as_str()).unwrap_or("decision").to_string(),
+        asserted: v.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.5) as f32,
+    })
+}
+
+pub fn drafts_json(repo_id: &str, model: &str, drafts: &[Draft]) -> String {
+    let mut s = format!(
+        "{{\"schema\":\"onboard-drafts/v0\",\"repo\":\"{}\",\"model\":\"{}\",\"drafts\":[\n",
+        jesc(repo_id),
+        jesc(model)
+    );
+    for (i, d) in drafts.iter().enumerate() {
+        let refs: Vec<String> = d.lead.refs.iter().map(|r| format!("\"{}\"", jesc(r))).collect();
+        s.push_str(&format!(
+            "{{\"keep\":{},\"shape\":\"{}\",\"confidence\":{:.2},\"claim\":\"{}\",\"why\":\"{}\",\"lead_kind\":\"{}\",\"lead_title\":\"{}\",\"refs\":[{}],\"date\":\"{}\"}}{}\n",
+            d.keep,
+            jesc(&d.shape),
+            d.asserted,
+            jesc(&d.claim),
+            jesc(&d.why),
+            d.lead.kind.as_str(),
+            jesc(&d.lead.title),
+            refs.join(","),
+            jesc(&d.lead.date),
+            if i + 1 < drafts.len() { "," } else { "" }
+        ));
+    }
+    s.push_str("]}\n");
+    s
+}
+
+pub fn drafts_md(repo_id: &str, model: &str, drafts: &[Draft]) -> String {
+    let kept: Vec<&Draft> = drafts.iter().filter(|d| d.keep && !d.claim.is_empty()).collect();
+    let skipped: Vec<&Draft> = drafts.iter().filter(|d| !d.keep || d.claim.is_empty()).collect();
+    let mut s = format!("# Onboard drafts — {repo_id} (tier 1, {model})\n\n");
+    s.push_str(&format!("{} escalated · {} kept · {} skipped\n\n## Kept\n\n", drafts.len(), kept.len(), skipped.len()));
+    for d in kept {
+        s.push_str(&format!("- **{}**\n  ({}, conf {:.1}) `{}`\n  why: {}\n", d.claim, d.shape, d.asserted, d.lead.refs.join(" "), d.why));
+    }
+    s.push_str("\n## Skipped\n\n");
+    for d in skipped {
+        s.push_str(&format!("- {} `{}`\n", d.lead.title, d.lead.refs.join(" ")));
+    }
+    s
+}
+
 // --- tests -----------------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -654,6 +842,38 @@ mod tests {
         assert_eq!(debt_tag("tempfile('corpus-batch-XXXXXX')"), None);
         assert_eq!(debt_tag("sha512-YZoXXXevb5dJI"), None);
         assert_eq!(debt_tag("// XXX: revisit"), Some(("XXX", 0.6)));
+    }
+
+    #[test]
+    fn escalation_selection_quotas_and_debt_file_dedup() {
+        let mk = |kind, score: f32, file: &str| Lead {
+            kind,
+            title: format!("{file}"),
+            evidence: String::new(),
+            refs: vec![format!("{file}:1")],
+            date: "2026-01-01".into(),
+            score,
+        };
+        let mut leads = vec![
+            mk(LeadKind::Debt, 9.0, "a.rs"),
+            mk(LeadKind::Debt, 8.0, "a.rs"), // same file → deduped
+            mk(LeadKind::Debt, 7.0, "b.rs"),
+            mk(LeadKind::Rationale, 3.0, "r1"),
+            mk(LeadKind::Rationale, 2.0, "r2"),
+            mk(LeadKind::Revert, 1.0, "v1"),
+            mk(LeadKind::Doc, 0.1, "docs/x.md"), // never escalated
+        ];
+        leads.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        leads.push(mk(LeadKind::Debt, 6.0, "c.rs"));
+        leads.last_mut().unwrap().title = "TODO aged 6.0y: c.rs:1".into();
+        let picked = select_for_escalation(&leads, 4);
+        assert_eq!(picked.len(), 4);
+        assert!(picked.iter().all(|l| l.kind != LeadKind::Doc));
+        assert!(picked.iter().all(|l| !l.title.starts_with("TODO")));
+        assert_eq!(picked.iter().filter(|l| l.title == "a.rs").count(), 1);
+        // every group is represented despite debt's high scores
+        assert!(picked.iter().any(|l| l.kind == LeadKind::Revert));
+        assert!(picked.iter().any(|l| l.kind == LeadKind::Rationale));
     }
 
     #[test]

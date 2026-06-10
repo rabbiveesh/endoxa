@@ -6,3 +6,7 @@ description = "Tiered onboarding harness. Tier 0: deterministic git-history lead
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+memory-embed = { path = "../memory-embed" }
+serde_json = "1"

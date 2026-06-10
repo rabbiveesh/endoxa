@@ -1,6 +1,6 @@
 # The tiered onboarding harness
 
-Status: tier 0 shipped (`mem onboard`, crate `memory-onboard`). Tiers 1–3 are design.
+Status: tiers 0–1 shipped (`mem onboard`, crate `memory-onboard`). Tiers 2–3 are design.
 
 ## Why this exists (and what it is NOT)
 
@@ -17,7 +17,7 @@ where a static doc wins. Instead it automates the corpus-authoring playbook
 | Tier | Cost | What | Status |
 |---|---|---|---|
 | 0 | deterministic, git-only | leads: reverts/reinstatements, rationale commits, aged debt comments, doc pointers | **shipped** |
-| 1 | cheap local model | turn leads into crisp claims; doc-vs-code contradiction probes; weak-model confident-and-wrong harvest (pre-defeated inoculation beliefs) | design |
+| 1 | cheap local model | turn leads into crisp claim drafts (shipped: `--escalate N`); doc-vs-code contradiction probes; weak-model confident-and-wrong harvest (pre-defeated inoculation beliefs) | **partly shipped** |
 | 2 | frontier agent | design-rationale extraction over tier-0/1 leads ("why X over Y"), verdict structuring, kludge → Deficiency beliefs | design |
 | 3 | the human | guided interview seeded by tier-0–2 findings ("this HACK survived 4.2y — why?"); the only source of head-only knowledge | design |
 
@@ -64,6 +64,45 @@ Two early lessons:
    marker lists may need a per-repo extension knob.
 2. **Reverts are rare in solo/squash-merge histories**; the supersession-chain
    harvest will earn its keep on multi-author repos with messier histories.
+
+## Tier 1: drafts, still not beliefs
+
+`mem onboard <repo> --escalate N` adds the judgment tier 0 refused to have. Selection
+first (`select_for_escalation`): doc pointers excluded, TODO debt excluded (see
+below), remaining debt deduped to one lead per file (a kludge cluster is one belief,
+not five), equal quota per kind-group so high-scoring debt can't starve rationale.
+Each picked lead gets richer deterministic
+context (full commit message; the tracked code around a debt comment), then one
+`chat_json` call (JUDGE_MODEL, default qwen2.5:7b — same harness as the judgment
+linker) returns `{keep, claim, why, kind, confidence}`. A degenerate-output gate
+(claim < 30 chars → rejected) catches truncated 7B fragments.
+
+Output: `drafts.{json,md}` beside the leads. Committing kept drafts into the store
+(author kind=agent id=<model>, directness: inferred, low source_weight) is a
+deliberate separate step — the eyeball pass owns the gate for now.
+
+Prompt lesson (first smoke test): telling the model a claim "is NOT a change summary"
+made it *reject leads whose evidence is a change summary* — which is all of them.
+The fix is framing the job as **extraction** ("the evidence is usually a change
+description; extract the durable knowledge it reveals") plus a per-kind shape hint
+("state the kludge, where it lives, and the constraint forcing it"). Rejection rate
+went from 4/6 (including the two best leads) to 0/6, with grounded claims.
+
+Two failure modes survived prompting — the 7B ceiling:
+1. **TODO leads → normative junk.** The judge rephrases every TODO as a prescriptive
+   claim ("the script must..."), even when explicitly told a TODO is an aspiration.
+   Fix is deterministic, not prompted: TODO leads never escalate (selection skips
+   them); HACK/kludge/workaround/FIXME are where real debt lives. TODOs remain in
+   leads.json for human browsing.
+2. **Claim/why mismatch on multi-bullet squash bodies.** The model occasionally pairs
+   one bullet's claim with another bullet's why. Prompting reduced but did not
+   eliminate it. This is tier-2 territory (frontier model per umbrella commit) —
+   the asserted confidence is untrusted anyway (StructuralOnly default), and the
+   eyeball pass catches the residue.
+
+Division of labor that emerges: **tier 0 owns recall, tier 1 owns translation, the
+gate stays human (or tier 2)** — precision comes from selection (what gets escalated),
+not from prompting a small judge harder.
 
 ## Eval hook
 
