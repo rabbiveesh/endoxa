@@ -737,7 +737,7 @@ pub fn drafts_json(repo_id: &str, model: &str, drafts: &[Draft]) -> String {
     for (i, d) in drafts.iter().enumerate() {
         let refs: Vec<String> = d.lead.refs.iter().map(|r| format!("\"{}\"", jesc(r))).collect();
         s.push_str(&format!(
-            "{{\"keep\":{},\"shape\":\"{}\",\"confidence\":{:.2},\"claim\":\"{}\",\"why\":\"{}\",\"lead_kind\":\"{}\",\"lead_title\":\"{}\",\"refs\":[{}],\"date\":\"{}\"}}{}\n",
+            "{{\"keep\":{},\"shape\":\"{}\",\"confidence\":{:.2},\"claim\":\"{}\",\"why\":\"{}\",\"lead_kind\":\"{}\",\"lead_title\":\"{}\",\"refs\":[{}],\"date\":\"{}\",\"evidence\":\"{}\"}}{}\n",
             d.keep,
             jesc(&d.shape),
             d.asserted,
@@ -747,11 +747,60 @@ pub fn drafts_json(repo_id: &str, model: &str, drafts: &[Draft]) -> String {
             jesc(&d.lead.title),
             refs.join(","),
             jesc(&d.lead.date),
+            jesc(&d.lead.evidence),
             if i + 1 < drafts.len() { "," } else { "" }
         ));
     }
     s.push_str("]}\n");
     s
+}
+
+/// Read drafts.json back (the commit step runs OFF the reviewed file, so the eyeball pass can
+/// delete bad drafts before anything reaches the store). Tolerates older files without
+/// `evidence`. Returns kept drafts only.
+pub fn load_kept_drafts(path: &Path) -> Result<Vec<Draft>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("bad drafts.json: {e}"))?;
+    let arr = v.get("drafts").and_then(|d| d.as_array()).ok_or("drafts.json has no `drafts`")?;
+    let s = |o: &serde_json::Value, k: &str| o.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let mut out = Vec::new();
+    for d in arr {
+        if !d.get("keep").and_then(|k| k.as_bool()).unwrap_or(false) {
+            continue;
+        }
+        let claim = s(d, "claim");
+        if claim.is_empty() {
+            continue;
+        }
+        let kind = match s(d, "lead_kind").as_str() {
+            "revert" => LeadKind::Revert,
+            "reinstate" => LeadKind::Reinstate,
+            "debt" => LeadKind::Debt,
+            "doc" => LeadKind::Doc,
+            _ => LeadKind::Rationale,
+        };
+        out.push(Draft {
+            lead: Lead {
+                kind,
+                title: s(d, "lead_title"),
+                evidence: s(d, "evidence"),
+                refs: d
+                    .get("refs")
+                    .and_then(|r| r.as_array())
+                    .map(|r| r.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .unwrap_or_default(),
+                date: s(d, "date"),
+                score: 0.0,
+            },
+            keep: true,
+            claim,
+            why: s(d, "why"),
+            shape: s(d, "shape"),
+            asserted: d.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.5) as f32,
+        });
+    }
+    Ok(out)
 }
 
 pub fn drafts_md(repo_id: &str, model: &str, drafts: &[Draft]) -> String {

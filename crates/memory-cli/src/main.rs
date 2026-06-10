@@ -96,7 +96,7 @@ fn main() {
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem reduce [--dry-run]        # collapse duplicate beliefs: recall folds them behind one rep");
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
-            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N]  # tier-0 lead harvest; tier-1 claim drafts");
+            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--commit]  # lead harvest → claim drafts → store");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -1071,6 +1071,7 @@ fn cmd_onboard(args: &[String]) {
     let mut out: Option<PathBuf> = None;
     let mut top = 25usize;
     let mut escalate = 0usize;
+    let mut commit = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1086,6 +1087,7 @@ fn cmd_onboard(args: &[String]) {
                 escalate = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(30);
                 i += 1;
             }
+            "--commit" => commit = true,
             a if !a.starts_with("--") => repo = PathBuf::from(a),
             _ => {}
         }
@@ -1162,6 +1164,75 @@ fn cmd_onboard(args: &[String]) {
         );
         println!("drafts: {}", dm.display());
     }
+
+    // commit: kept drafts (from the REVIEWED drafts.json — delete bad lines first) become
+    // beliefs in repo canon. Low source_weight + directness:inferred mark them as a cheap
+    // model's reading of evidence, not gospel; the frontier treats them accordingly.
+    if commit {
+        let drafts_path = out_dir.join("drafts.json");
+        let kept = match memory_onboard::load_kept_drafts(&drafts_path) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("commit failed: {e} (run with --escalate first)");
+                std::process::exit(1);
+            }
+        };
+        let model = std::env::var("JUDGE_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into());
+        let dir = store_dir();
+        let scope = format!("repo:{}", h.repo_id); // onboarded knowledge is repo canon
+        let txn = iso_now();
+        let (mut written, mut skipped) = (0, 0);
+        for d in &kept {
+            // deterministic id (no txn): re-running --commit is a no-op per claim
+            let id = content_id(&format!("onboard|{scope}|{}", d.claim));
+            let path = dir.join(format!("{id}.md"));
+            if path.exists() {
+                skipped += 1;
+                continue;
+            }
+            let md = onboard_belief_md(&id, &scope, d, &model, &txn);
+            if std::fs::write(&path, md).is_ok() {
+                written += 1;
+            }
+        }
+        println!("committed {written} onboarded belief(s) into scope={scope} ({skipped} already present)");
+    }
+}
+
+/// Belief file for one kept draft. Differs from `belief_md` where it must: the author is the
+/// judge MODEL (not the cli), directness is `inferred` (a model's reading of evidence, not a
+/// stated fact), source_weight is conservative, and the lead's refs + evidence ride along.
+fn onboard_belief_md(id: &str, scope: &str, d: &memory_onboard::Draft, model: &str, txn: &str) -> String {
+    let one_line = d.claim.replace('\n', " ");
+    let mut fm = String::new();
+    fm.push_str("---\n");
+    fm.push_str(&format!("id: {id}\n"));
+    fm.push_str(&format!("slug: {}\n", slugify(&d.claim)));
+    fm.push_str(&format!("scope: {scope}\n"));
+    fm.push_str("claim:\n  kind: text\n  text: >-\n");
+    fm.push_str(&format!("    {one_line}\n"));
+    fm.push_str(&format!("author:\n  kind: agent\n  id: {model}\n"));
+    fm.push_str(&format!("provenance:\n  txn_time: {txn}\n  valid_time: null\n"));
+    fm.push_str("  source:\n    kind: onboard\n    session: tier1\n    turn: 0\n");
+    if d.lead.refs.is_empty() {
+        fm.push_str("  refs: []\n");
+    } else {
+        fm.push_str("  refs:\n");
+        for r in &d.lead.refs {
+            fm.push_str(&format!("    - {r}\n"));
+        }
+    }
+    fm.push_str("  derived_from: []\n");
+    fm.push_str(&format!(
+        "confidence:\n  directness: inferred\n  observation_count: 1\n  source_weight: 0.5\n  asserted: {:.2}\n",
+        d.asserted
+    ));
+    fm.push_str("edges: []\ncoord: null\n---\n\n");
+    fm.push_str(&format!("{}\n\nLead: {} ({})\n", d.why, d.lead.title, d.lead.date));
+    if !d.lead.evidence.is_empty() {
+        fm.push_str(&format!("\nEvidence:\n{}\n", d.lead.evidence));
+    }
+    fm
 }
 
 // --- novelty ledger (the negative-result cache + bridge-rate counters), JSONL sidecar ----
