@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/memory-core", "crates/memory-embed", "crates/memory-consolidate", "crates/memory-cli"]
+members = ["crates/memory-core", "crates/memory-embed", "crates/memory-consolidate", "crates/memory-cli", "crates/memory-onboard"]
 resolver = "2"

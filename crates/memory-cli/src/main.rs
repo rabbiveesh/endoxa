@@ -83,6 +83,7 @@ fn main() {
         Some("consolidate") => cmd_consolidate(&args[1..]),
         Some("reduce") => cmd_reduce(&args[1..]),
         Some("dream") => cmd_dream(&args[1..]),
+        Some("onboard") => cmd_onboard(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
             eprintln!("usage:");
@@ -95,6 +96,7 @@ fn main() {
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem reduce [--dry-run]        # collapse duplicate beliefs: recall folds them behind one rep");
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
+            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N]  # tier-0 harvest: git history → belief leads");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -1059,6 +1061,68 @@ fn cmd_dream(args: &[String]) {
     } else {
         println!("no new bridges this pass ({} probe(s) recorded as earned-unrelated).", records.len());
     }
+}
+
+/// Tier-0 onboarding: deterministic git-history harvest → lead files for the eyeball pass.
+/// Writes OUTSIDE any repo by default (the data dir), so private-repo leads can't end up
+/// committed by accident. Leads are candidates, not beliefs — nothing touches the store.
+fn cmd_onboard(args: &[String]) {
+    let mut repo = PathBuf::from(".");
+    let mut out: Option<PathBuf> = None;
+    let mut top = 25usize;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--out" => {
+                out = args.get(i + 1).map(PathBuf::from);
+                i += 1;
+            }
+            "--top" => {
+                top = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(25);
+                i += 1;
+            }
+            a if !a.starts_with("--") => repo = PathBuf::from(a),
+            _ => {}
+        }
+        i += 1;
+    }
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let h = match memory_onboard::harvest(&repo, now_epoch) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("onboard failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    let out_dir = out.unwrap_or_else(|| {
+        store_dir().parent().map(|p| p.to_path_buf()).unwrap_or_else(store_dir).join("onboard").join(&h.repo_id)
+    });
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("can't create {}: {e}", out_dir.display());
+        std::process::exit(1);
+    }
+    let json_path = out_dir.join("leads.json");
+    let md_path = out_dir.join("leads.md");
+    let _ = std::fs::write(&json_path, memory_onboard::leads_json(&h));
+    let _ = std::fs::write(&md_path, memory_onboard::leads_md(&h, top));
+
+    use memory_onboard::LeadKind;
+    println!(
+        "{}: {} commits → {} leads ({} reinstate, {} revert, {} rationale, {} debt, {} doc)",
+        h.repo_id,
+        h.commits_scanned,
+        h.leads.len(),
+        h.count(LeadKind::Reinstate),
+        h.count(LeadKind::Revert),
+        h.count(LeadKind::Rationale),
+        h.count(LeadKind::Debt),
+        h.count(LeadKind::Doc),
+    );
+    println!("report: {}", md_path.display());
+    println!("full:   {}", json_path.display());
 }
 
 // --- novelty ledger (the negative-result cache + bridge-rate counters), JSONL sidecar ----

@@ -12,5 +12,6 @@ path = "src/main.rs"
 memory-core = { path = "../memory-core" }
 memory-consolidate = { path = "../memory-consolidate" }
 memory-embed = { path = "../memory-embed" }
+memory-onboard = { path = "../memory-onboard" }
 config = "0.14"
 serde = { version = "1", features = ["derive"] }

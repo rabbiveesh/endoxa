@@ -1,0 +1,8 @@
+[package]
+name = "memory-onboard"
+version = "0.1.0"
+edition = "2021"
+description = "Tiered onboarding harness. Tier 0: deterministic git-history lead harvest (no LLM, no writes)."
+
+[lib]
+path = "src/lib.rs"

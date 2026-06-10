@@ -267,6 +267,7 @@ dependencies = [
  "memory-consolidate",
  "memory-core",
  "memory-embed",
+ "memory-onboard",
  "serde",
 ]
 
@@ -288,6 +289,10 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
+
+[[package]]
+name = "memory-onboard"
+version = "0.1.0"
 
 [[package]]
 name = "minimal-lexical"
