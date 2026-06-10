@@ -202,3 +202,21 @@ rule to a stated principle). Drift check earned its keep immediately: caught one
 belief the tree had overtaken (SUPER::X typing, fixed the day after the belief was
 recorded) — superseded in-store, branch-scoped, promoting at merge. Report:
 `<data-dir>/onboard/perl-tree-sitter-lsp/legibility-audit.md`.
+
+Second run (private-crm, 36 beliefs, 2026-06-10): **18 legible / 11 partial / 5 gap /
+2 drift** — score 18:5 vs 45:4, the law now quantified from both ends (~11:1 vs
+~3.6:1). Three findings that generalize:
+
+1. **Negative knowledge is the systematic blind spot.** The gaps clumped in (a) the
+   newest subsystem and (b) *deliberate removals* — a thing destroyed on purpose
+   leaves no artifact to read, so "don't reintroduce X" is illegible in every repo.
+   Mechanisms get documented; absences don't.
+2. **The "actively misleading" verdict class exists**: one gap had code whose surface
+   reading implies the WRONG storage location (the out-of-band belief says why it
+   moved elsewhere mid-flow). Worse than undocumented — counter-documented.
+3. **Drift exposed a tier-1 design flaw**: both drifted beliefs were onboarded from
+   historical commits and stated as current-state, then overtaken by later history
+   the harvester also saw but didn't connect. Tier 1 should (a) stamp `valid_time`
+   from the source commit date instead of leaving it null, and (b) verify
+   current-state claims against HEAD before commit — or phrase them as dated
+   episodes. The audit doubles as the verification pass, but it shouldn't have to.
