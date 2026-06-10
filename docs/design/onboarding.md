@@ -140,3 +140,46 @@ Findings beyond the score:
 3. **Memory acts as an index into the code**: the recall hit ("backend reports are
    limited to three months") is what sent M to the enforcing type — the belief
    didn't replace code reading, it aimed it.
+
+### Second A/B (2026-06-10, perl-tree-sitter-lsp, 2 tasks, un-gamed)
+
+Same protocol, but tasks were picked by an independent agent from the repo's OWN
+backlog (`docs/qa-design-items.md` D1: arbitrary-depth inheritance resolution;
+B2/B3: export-surface model) without reading git history or the memory. 36 tier-1
+beliefs committed to repo canon first. Fairness notes: the backlog doc (readable by
+both arms) states the recommended direction for both items, and arm M's top recall
+on D1 was a pre-existing global-scoped lesson (frozen-edge/query-time), not an
+onboarded belief.
+
+Result: **quality parity, modest cost edge to memory.**
+
+| | task 1 M | task 1 R | task 2 M | task 2 R |
+|---|---|---|---|---|
+| tokens | 61k | 65k | 40k | 51k |
+| tool calls | 18 | 22 | 16 | 22 |
+| verdict | parity — complementary strengths | | parity — complementary strengths | |
+
+Per-task texture: on D1, M's unique contribution was recalled scar tissue (don't
+memoize a `None` computed while a hop was unresolved — query-memo poisoning; keep
+synthesized parent edges transient, never pushed during the build fold); R's was an
+integrated fix for the non-primary-package cache hole plus a measure-before-deleting
+migration. On B2/B3 both arms discovered the surface model already substantially
+exists; M caught two subtle semantic interactions (selector negation × bare-`use`
+`export_ok` leniency; "lists a name ≠ defines the sub" origin verification), R had
+the broader honest-gaps inventory. Both R arms recovered most canon from the repo's
+ADRs, design docs, and dense commit bodies.
+
+### The emerging law
+
+Memory's delta tracks how out-of-band the needed knowledge is — i.e. it is
+inversely proportional to repo legibility:
+
+- **private-crm** (sparse docs, messy multi-author history): memory decisive — the
+  raw arm missed the policy constraint entirely and paid +25% tokens.
+- **perl-tree-sitter-lsp** (rich ADRs, backlog docs with recommendations, written-out
+  commit bodies): parity on quality; memory worth ~10–25% fewer tokens and ~25%
+  fewer tool calls, plus occasional scar-tissue assists nothing in-tree records.
+
+This is the original hypothesis, now measured from both sides: the onboarding
+harness earns its keep exactly where documentation is thin. A legible repo has, in
+effect, already onboarded itself — its ADRs are hand-authored beliefs in-tree.
