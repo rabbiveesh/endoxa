@@ -183,3 +183,22 @@ inversely proportional to repo legibility:
 This is the original hypothesis, now measured from both sides: the onboarding
 harness earns its keep exactly where documentation is thin. A legible repo has, in
 effect, already onboarded itself — its ADRs are hand-authored beliefs in-tree.
+
+## The legibility audit (tier 2, inverted)
+
+The law inverts into a product: instead of extracting more knowledge into memory,
+audit **what memory knows that the tree doesn't record** and propose ADRs/comments
+to close the gaps. Shipped as the `legibility-audit` skill
+(`.claude/skills/legibility-audit/SKILL.md`); the audit is read-only, the deliverable
+is proposed text plus a drift check (beliefs the tree now contradicts → supersede).
+
+First run (perl-tree-sitter-lsp, 55 beliefs, 2026-06-10): **45 legible / 6 partial /
+4 gap** — quantifying the same legibility the A/B measured behaviorally. The finding:
+all four gaps form ONE cluster — release & publishing operations ("the repo has zero
+words about how to ship itself"). Ops knowledge accretes in memory across sessions
+but never lands in-tree, because no code change carries it there. Remediations
+drafted (RELEASING.md runbook; an ADR promoting the per-instance query-time-cross-file
+rule to a stated principle). Drift check earned its keep immediately: caught one
+belief the tree had overtaken (SUPER::X typing, fixed the day after the belief was
+recorded) — superseded in-store, branch-scoped, promoting at merge. Report:
+`<data-dir>/onboard/perl-tree-sitter-lsp/legibility-audit.md`.

@@ -20,3 +20,6 @@ docs/corpus-agent-prompt.md
 
 # Local embedding cache
 .embeddings.json
+
+# Claude worktree experiments — throwaway
+.claude/worktrees/
