@@ -31,13 +31,13 @@ fn main() {
 
     println!(
         "loaded {} beliefs from {} ({} defeated on the main frontier)\n",
-        g.beliefs.len(),
+        g.len(),
         beliefs_dir.display(),
         defeated.len()
     );
 
     println!("NAIVE (lexical match, no frontier) — what a vector-ish store would surface:");
-    for b in g.beliefs.iter().filter(|b| matches(b)) {
+    for b in g.iter().filter(|b| matches(b)) {
         let tag = if defeated.contains(&b.id) {
             "   <-- DEFEATED (superseded/refuted), but lexically central"
         } else {
@@ -48,7 +48,7 @@ fn main() {
 
     println!("\nRESOLVED (current frontier only) — what recall returns:");
     let mut dropped = Vec::new();
-    for b in g.beliefs.iter().filter(|b| matches(b)) {
+    for b in g.iter().filter(|b| matches(b)) {
         if defeated.contains(&b.id) {
             dropped.push(b.slug.as_str());
         } else {

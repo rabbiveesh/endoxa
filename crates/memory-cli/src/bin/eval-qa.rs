@@ -73,7 +73,7 @@ fn main() {
 
     for q in QUESTIONS {
         let g = Graph::load_dir(&root.join(q.corpus).join("beliefs")).expect("load corpus");
-        let content: Vec<&Belief> = g.beliefs.iter().filter(|b| b.relation.is_none()).collect();
+        let content: Vec<&Belief> = g.content().collect();
 
         // embeddings, cached per corpus
         let dir = root.join(q.corpus);

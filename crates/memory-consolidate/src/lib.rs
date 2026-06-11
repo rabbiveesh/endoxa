@@ -90,7 +90,7 @@ impl Reducer {
     /// when an embedding is missing — treated as "not similar enough" so the edge is dropped).
     pub fn reduce(&self, graph: &Graph, sim: &dyn Fn(&str, &str) -> Option<f32>) -> Vec<LinkProposal> {
         // L0 content beliefs only — never read edge-beliefs (feedback guard).
-        let content: Vec<&Belief> = graph.beliefs.iter().filter(|b| b.relation.is_none()).collect();
+        let content: Vec<&Belief> = graph.content().collect();
         let mut uf = UnionFind::new(content.iter().map(|b| b.id.clone()));
 
         // Signal (a): byte-identical trimmed claims merge directly (no similarity gate needed —
@@ -110,8 +110,7 @@ impl Reducer {
         // generic relatedness edge (`is_generic`) suggests "same proposition" — but only union when
         // re-gated by `sim >= dup_sim` (a loosened linker can't widen a duplicate cluster). Skip
         // `same-as` edges entirely so the Reducer never re-enters its own output.
-        for b in &graph.beliefs {
-            let Some(r) = &b.relation else { continue };
+        for (_b, r) in graph.relations() {
             if r.kind.is_collapsing() {
                 continue; // feedback guard: don't read our own `same-as` edges
             }
@@ -141,12 +140,7 @@ impl Reducer {
                 continue;
             }
             let rep = members.iter().min().unwrap().clone();
-            let rep_slug = graph
-                .beliefs
-                .iter()
-                .find(|b| b.id == rep)
-                .map(|b| b.slug.clone())
-                .unwrap_or_else(|| rep.clone());
+            let rep_slug = graph.by_id(&rep).map(|b| b.slug.clone()).unwrap_or_else(|| rep.clone());
             for m in members {
                 if *m == rep {
                     continue;
@@ -312,9 +306,8 @@ impl Linker for ProximityLinker {
         };
         let mut scored: Vec<(&Belief, f32)> = ctx
             .graph
-            .beliefs
-            .iter()
-            .filter(|b| b.id != ctx.new.id && b.relation.is_none())
+            .content()
+            .filter(|b| b.id != ctx.new.id)
             .filter_map(|b| ctx.vectors.get(&b.id).map(|v| (b, cosine(nv, v))))
             .filter(|(_, s)| *s >= self.plausible)
             .collect();
@@ -403,9 +396,8 @@ impl Linker for JudgmentLinker {
         };
         let mut cands: Vec<(&Belief, f32)> = ctx
             .graph
-            .beliefs
-            .iter()
-            .filter(|b| b.id != ctx.new.id && b.relation.is_none())
+            .content()
+            .filter(|b| b.id != ctx.new.id)
             // A (the new/target belief) must be genuinely NEWER than B, so supersedes points
             // the right way — the judge can't infer recency from text.
             .filter(|b| b.txn_time < ctx.new.txn_time)
@@ -546,10 +538,8 @@ impl NoveltyDreamer {
     ) -> (Vec<LinkProposal>, Vec<ProbeRecord>) {
         // pairs already joined by any reified edge — a bridged pair isn't "unrelated".
         let mut connected: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for b in &graph.beliefs {
-            if let Some(r) = &b.relation {
-                connected.insert(novelty_pair_key(&r.subject, &r.object));
-            }
+        for (_b, r) in graph.relations() {
+            connected.insert(novelty_pair_key(&r.subject, &r.object));
         }
         // `seen` = pairs already probed (the persisted ledger PLUS anything probed earlier this
         // run), so a pair is never probed twice — including from the other endpoint's target.
@@ -558,9 +548,8 @@ impl NoveltyDreamer {
         for t in targets {
             let Some(tv) = vectors.get(&t.id) else { continue };
             let mut cands: Vec<(&Belief, f32)> = graph
-                .beliefs
-                .iter()
-                .filter(|b| b.id != t.id && b.relation.is_none())
+                .content()
+                .filter(|b| b.id != t.id)
                 .filter(|b| !connected.contains(&novelty_pair_key(&t.id, &b.id)))
                 .filter(|b| !seen.contains(&novelty_pair_key(&t.id, &b.id)))
                 .filter_map(|b| vectors.get(&b.id).map(|v| (b, cosine(tv, v))))
@@ -623,7 +612,7 @@ mod tests {
 
         let g = Graph::from_beliefs(vec![content("b_old", "old"), content("b_new", "new")]);
         let vectors = HashMap::new();
-        let new = g.beliefs.iter().find(|b| b.id == "b_new").unwrap();
+        let new = g.by_id("b_new").unwrap();
         let hints = vec![Hint { kind: EdgeKind::Supersedes, target_ref: "old".into() }];
         let ctx = LinkCtx { new, graph: &g, vectors: &vectors, hints: &hints };
 
@@ -713,7 +702,7 @@ mod tests {
         vectors.insert("b_new".to_string(), vec![1.0, 0.0, 0.0]);
         vectors.insert("b_near".to_string(), vec![0.95, 0.05, 0.0]); // ~0.99 cosine
         vectors.insert("b_far".to_string(), vec![0.0, 1.0, 0.0]); // 0.0 cosine
-        let new = g.beliefs.iter().find(|b| b.id == "b_new").unwrap();
+        let new = g.by_id("b_new").unwrap();
         let ctx = LinkCtx { new, graph: &g, vectors: &vectors, hints: &[] };
 
         let props = ProximityLinker::default().link(&ctx);

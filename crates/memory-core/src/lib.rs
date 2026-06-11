@@ -395,21 +395,29 @@ pub fn iso_now() -> String {
 }
 
 /// An in-memory belief graph for one corpus / world `main`.
+///
+/// THE BACKEND SEAM. Fields are private; every consumer goes through the accessors below
+/// (`iter`/`content`/`relations`/`by_id`/`current_content`/`adjacency`), so this struct is the
+/// only thing that knows beliefs live in a `Vec` loaded from `.md` files. Swapping in an
+/// embedded database means reimplementing THIS, not touching the callers. Per the L0 contract
+/// (belief files are the durable part, everything above is derived and disposable), a DB
+/// backend should be a regenerable INDEX over the files, not a second source of truth.
+/// See `docs/design/storage-backends.md` — LadybugDB (`lbug`) is the standing candidate.
 pub struct Graph {
-    pub beliefs: Vec<Belief>,
-    by_id: HashMap<Id, usize>,
-    by_slug: HashMap<String, usize>,
+    beliefs: Vec<Belief>,
+    id_index: HashMap<Id, usize>,
+    slug_index: HashMap<String, usize>,
 }
 
 impl Graph {
     pub fn from_beliefs(beliefs: Vec<Belief>) -> Graph {
-        let mut by_id = HashMap::new();
-        let mut by_slug = HashMap::new();
+        let mut id_index = HashMap::new();
+        let mut slug_index = HashMap::new();
         for (i, b) in beliefs.iter().enumerate() {
-            by_id.insert(b.id.clone(), i);
-            by_slug.insert(b.slug.clone(), i);
+            id_index.insert(b.id.clone(), i);
+            slug_index.insert(b.slug.clone(), i);
         }
-        Graph { beliefs, by_id, by_slug }
+        Graph { beliefs, id_index, slug_index }
     }
 
     pub fn load_dir(dir: &Path) -> std::io::Result<Graph> {
@@ -428,16 +436,66 @@ impl Graph {
     }
 
     pub fn get(&self, slug: &str) -> Option<&Belief> {
-        self.by_slug.get(slug).map(|&i| &self.beliefs[i])
+        self.slug_index.get(slug).map(|&i| &self.beliefs[i])
+    }
+
+    /// O(1) lookup by belief id.
+    pub fn by_id(&self, id: &str) -> Option<&Belief> {
+        self.id_index.get(id).map(|&i| &self.beliefs[i])
     }
 
     /// id-or-slug → canonical id (prefers id).
     pub fn resolve_ref(&self, r: &str) -> Option<Id> {
-        if self.by_id.contains_key(r) {
+        if self.id_index.contains_key(r) {
             Some(r.to_string())
         } else {
-            self.by_slug.get(r).map(|&i| self.beliefs[i].id.clone())
+            self.slug_index.get(r).map(|&i| self.beliefs[i].id.clone())
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.beliefs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.beliefs.is_empty()
+    }
+
+    /// Every belief — content AND edge-beliefs.
+    pub fn iter(&self) -> impl Iterator<Item = &Belief> {
+        self.beliefs.iter()
+    }
+
+    /// Content beliefs only (the propositions; edge-beliefs excluded).
+    pub fn content(&self) -> impl Iterator<Item = &Belief> {
+        self.beliefs.iter().filter(|b| b.relation.is_none())
+    }
+
+    /// Edge-beliefs, each with its reified relation.
+    pub fn relations(&self) -> impl Iterator<Item = (&Belief, &Relation)> {
+        self.beliefs.iter().filter_map(|b| b.relation.as_ref().map(|r| (b, r)))
+    }
+
+    /// The surfaced set: undefeated content beliefs. Takes `defeated` so a caller that also
+    /// needs the defeat set for adjacency/fold pays for ONE frontier resolution, not three.
+    pub fn current_content(&self, defeated: &HashSet<Id>) -> Vec<&Belief> {
+        self.content().filter(|b| !defeated.contains(&b.id)).collect()
+    }
+
+    /// Index from belief-id → the in-force (undefeated) edge-beliefs touching it (as subject
+    /// or object). Deterministic; powers recall affordances + `mem expand`.
+    pub fn adjacency(&self, defeated: &HashSet<Id>) -> HashMap<Id, Vec<Relation>> {
+        let mut adj: HashMap<Id, Vec<Relation>> = HashMap::new();
+        for (b, r) in self.relations() {
+            if defeated.contains(&b.id) {
+                continue; // a defeated edge is no longer in force
+            }
+            adj.entry(r.subject.clone()).or_default().push(r.clone());
+            if r.object != r.subject {
+                adj.entry(r.object.clone()).or_default().push(r.clone()); // avoid double-add on self-anchored edges (forget)
+            }
+        }
+        adj
     }
 
     /// **Frontier resolution.** Returns the DEFEATED ids on `main`. Honors BOTH inline defeating
@@ -462,12 +520,12 @@ impl Graph {
                 // supersession-defeated belief keeps superseding its own targets (chain persists).
                 if !by_verdict.contains(&b.id) {
                     for e in &b.edges {
-                        if matches!(e.kind, EdgeKind::Supersedes) && self.by_id.contains_key(&e.target) {
+                        if matches!(e.kind, EdgeKind::Supersedes) && self.id_index.contains_key(&e.target) {
                             next.insert(e.target.clone());
                         }
                     }
                     if let Some(r) = &b.relation {
-                        if matches!(r.kind, EdgeKind::Supersedes) && self.by_id.contains_key(&r.object) {
+                        if matches!(r.kind, EdgeKind::Supersedes) && self.id_index.contains_key(&r.object) {
                             next.insert(r.object.clone());
                         }
                     }
@@ -477,7 +535,7 @@ impl Graph {
                 if !defeated.contains(&b.id) {
                     for e in &b.edges {
                         if e.kind.is_defeating() && !matches!(e.kind, EdgeKind::Supersedes)
-                            && self.by_id.contains_key(&e.target)
+                            && self.id_index.contains_key(&e.target)
                         {
                             next.insert(e.target.clone());
                             next_v.insert(e.target.clone());
@@ -485,7 +543,7 @@ impl Graph {
                     }
                     if let Some(r) = &b.relation {
                         if r.kind.is_defeating() && !matches!(r.kind, EdgeKind::Supersedes)
-                            && self.by_id.contains_key(&r.object)
+                            && self.id_index.contains_key(&r.object)
                         {
                             next.insert(r.object.clone());
                             next_v.insert(r.object.clone());

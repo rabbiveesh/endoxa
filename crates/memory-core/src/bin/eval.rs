@@ -32,10 +32,10 @@ fn main() {
 
     for name in &corpora {
         let Ok(g) = Graph::load_dir(&root.join(name).join("beliefs")) else { continue };
-        let ids: HashSet<&str> = g.beliefs.iter().map(|b| b.id.as_str()).collect();
+        let ids: HashSet<&str> = g.iter().map(|b| b.id.as_str()).collect();
         let frontier = g.defeated();
         let naive = naive_refuted(&g, &ids);
-        let slug = |id: &str| g.beliefs.iter().find(|b| b.id == id).map(|b| b.slug.clone()).unwrap_or_else(|| id.into());
+        let slug = |id: &str| g.by_id(id).map(|b| b.slug.clone()).unwrap_or_else(|| id.into());
 
         // REINSTATEMENT: naive marks it refuted, the frontier keeps it current.
         let mut reinstated = 0usize;
@@ -48,7 +48,7 @@ fn main() {
 
         // OPEN CONFLICT: target of a LIVE `attacks` edge that the frontier keeps current.
         let mut open: HashSet<String> = HashSet::new();
-        for b in &g.beliefs {
+        for b in g.iter() {
             if frontier.contains(&b.id) {
                 continue; // the attacking edge must itself be in force
             }
@@ -63,7 +63,7 @@ fn main() {
             }
         }
 
-        let n_content = g.beliefs.iter().filter(|b| b.relation.is_none()).count();
+        let n_content = g.content().count();
         println!("{:<22} {:>8} {:>9} {:>11} {:>10}", name, n_content, frontier.len(), reinstated, open.len());
         t_content += n_content;
         t_def += frontier.len();
@@ -91,7 +91,7 @@ fn main() {
 /// WITHOUT the fixpoint guard that ignores edges whose own source is defeated.
 fn naive_refuted(g: &Graph, ids: &HashSet<&str>) -> HashSet<String> {
     let mut r = HashSet::new();
-    for b in &g.beliefs {
+    for b in g.iter() {
         for e in &b.edges {
             if e.kind.is_defeating() && ids.contains(e.target.as_str()) {
                 r.insert(e.target.clone());

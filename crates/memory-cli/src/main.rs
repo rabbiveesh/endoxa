@@ -176,18 +176,14 @@ fn cmd_recall(args: &[String]) {
     };
     // scope-filter BEFORE resolving the frontier (gives branch divergence for free)
     let sg = scoped_graph(&g, &scopes);
-    if sg.beliefs.is_empty() {
+    if sg.is_empty() {
         println!("No memories in scope ({}).", scopes.join(", "));
         return;
     }
     let defeated = sg.defeated();
-    let current: Vec<&Belief> = sg
-        .beliefs
-        .iter()
-        .filter(|b| !defeated.contains(&b.id) && b.relation.is_none())
-        .collect();
+    let current = sg.current_content(&defeated);
 
-    let dropped = sg.beliefs.iter().filter(|b| b.relation.is_none() && defeated.contains(&b.id)).count();
+    let dropped = sg.content().filter(|b| defeated.contains(&b.id)).count();
     let (mut hits, mode) = match rank(&dir, &current, &query) {
         Ok(r) => (r, format!("semantic; scopes: {}", scopes.join("+"))),
         Err(reason) => (lexical(&current, &query), format!("lexical fallback ({reason})")),
@@ -197,7 +193,7 @@ fn cmd_recall(args: &[String]) {
         return;
     }
     // Current-edge index (drives both the corroboration boost and the affordances below).
-    let adj = relation_adjacency(&sg);
+    let adj = sg.adjacency(&defeated);
     // BOOST (surfacing-stage): lift well-corroborated hits by their incoming `supports` count.
     // A gentle, capped, multiplicative nudge on the cosine score — re-rank BEFORE we truncate so
     // the boost can pull a well-supported near-tie into the top-N, but never leapfrog a clearly
@@ -214,7 +210,7 @@ fn cmd_recall(args: &[String]) {
     // ONE display slot: rewrite each member-hit onto its representative (surface the rep's
     // slug+claim, keep the BEST score seen for the cluster), then dedup so the cluster occupies a
     // single row. Frontier/defeated logic is untouched — every member stays current on disk.
-    let (fold, absorbed) = collapse_map(&sg);
+    let (fold, absorbed) = collapse_map(&sg, &defeated);
     if !fold.is_empty() {
         let rep_of = |id: &str| -> String { fold.get(id).cloned().unwrap_or_else(|| id.to_string()) };
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -226,9 +222,7 @@ fn cmd_recall(args: &[String]) {
             }
             // surface the representative's slug + claim (fall back to the hit if rep not found)
             let (rslug, rclaim) = sg
-                .beliefs
-                .iter()
-                .find(|b| b.id == rep)
+                .by_id(&rep)
                 .map(|b| (b.slug.clone(), b.claim.clone()))
                 .unwrap_or((slug, claim));
             folded.push((rep, rslug, rclaim, score));
@@ -243,7 +237,7 @@ fn cmd_recall(args: &[String]) {
     );
     // Affordances: annotate each hit with its current edge-counts so the robot KNOWS what's
     // expandable (and can probe with `mem expand`) — we don't walk the graph for it here.
-    let slug_of = |id: &str| sg.beliefs.iter().find(|b| b.id == id).map(|b| b.slug.clone());
+    let slug_of = |id: &str| sg.by_id(id).map(|b| b.slug.clone());
     let mut any_expandable = false;
     for (id, slug, claim, score) in &hits {
         let raw = adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]);
@@ -295,7 +289,7 @@ fn cmd_recall(args: &[String]) {
                     if other == anchor_id {
                         continue;
                     }
-                    let Some(other_b) = sg.beliefs.iter().find(|b| &b.id == other && b.relation.is_none()) else {
+                    let Some(other_b) = sg.by_id(other).filter(|b| b.relation.is_none()) else {
                         continue; // other endpoint must be a still-current content belief
                     };
                     let key = novelty_pair_key(anchor_id, other);
@@ -332,18 +326,18 @@ fn cmd_expand(args: &[String]) {
         println!("No belief '{reference}' in scope ({}).", scopes.join(", "));
         return;
     };
-    let target = sg.beliefs.iter().find(|b| b.id == id).unwrap();
+    let target = sg.by_id(&id).unwrap();
     println!("[{}] {}\n", target.slug, target.claim);
 
     let defeated = sg.defeated();
-    let adj = relation_adjacency(&sg);
+    let adj = sg.adjacency(&defeated);
     let raw = adj.get(&id).map(|v| v.as_slice()).unwrap_or(&[]);
     let rels = collapse(&id, raw);
     let mut printed = 0;
     for r in &rels {
         let outgoing = r.subject == id;
         let other_id = if outgoing { &r.object } else { &r.subject };
-        let Some(nb) = sg.beliefs.iter().find(|b| &b.id == other_id) else { continue };
+        let Some(nb) = sg.by_id(other_id) else { continue };
         let label = if outgoing {
             format!("{} →", r.kind.as_str())
         } else {
@@ -395,12 +389,7 @@ fn cmd_ask(args: &[String]) {
         Err(_) => { println!("No memories yet."); return; }
     };
     let sg = scoped_graph(&g, &scopes);
-    let defeated = sg.defeated();
-    let current: Vec<&Belief> = sg
-        .beliefs
-        .iter()
-        .filter(|b| !defeated.contains(&b.id) && b.relation.is_none())
-        .collect();
+    let current = sg.current_content(&sg.defeated());
     if current.is_empty() {
         println!("No memory in scope ({}).", scopes.join(", "));
         return;
@@ -501,7 +490,7 @@ fn cmd_forget(args: &[String]) {
         println!("No belief '{}' in scope ({}).", reference.trim(), scopes.join(", "));
         return;
     };
-    let target = sg.beliefs.iter().find(|b| b.id == id).unwrap();
+    let target = sg.by_id(&id).unwrap();
 
     // Forgetting an edge-belief is the clean UNDO path (forget a retraction = un-forget; forget a
     // supersedes = un-supersede). But machine-inferred edges (judge/proximity) are a REGENERABLE
@@ -594,7 +583,7 @@ fn cmd_promote(args: &[String]) {
     };
 
     let branch_beliefs: Vec<&Belief> =
-        g.beliefs.iter().filter(|b| belief_scope(b) == from_scope).collect();
+        g.iter().filter(|b| belief_scope(b) == from_scope).collect();
     if branch_beliefs.is_empty() {
         println!("No branch-local beliefs in scope ({from_scope}) — nothing to promote.");
         return;
@@ -608,7 +597,7 @@ fn cmd_promote(args: &[String]) {
         remap.insert(b.id.clone(), content_id(&format!("promote|{}|{canon_scope}", b.id)));
     }
     let existing: std::collections::HashSet<&str> =
-        g.beliefs.iter().map(|b| b.id.as_str()).collect();
+        g.iter().map(|b| b.id.as_str()).collect();
 
     let mut promoted_content = 0usize;
     for b in &content {
@@ -635,7 +624,7 @@ fn cmd_promote(args: &[String]) {
     let resolve = |endpoint: &str| -> Option<String> {
         if let Some(p) = remap.get(endpoint) {
             Some(p.clone())
-        } else if g.beliefs.iter().any(|x| x.id == endpoint && belief_scope(x) == canon_scope) {
+        } else if g.by_id(endpoint).map(|x| belief_scope(x) == canon_scope).unwrap_or(false) {
             Some(endpoint.to_string()) // already canon — point straight at it
         } else {
             None
@@ -698,35 +687,18 @@ fn collapse(anchor: &str, rels: &[Relation]) -> Vec<Relation> {
         .collect()
 }
 
-/// Index from belief-id → the CURRENT (undefeated) edge-beliefs touching it (as subject or
-/// object). Deterministic; powers recall affordances + `mem expand`.
-fn relation_adjacency(g: &Graph) -> std::collections::HashMap<String, Vec<Relation>> {
-    let defeated = g.defeated();
-    let mut adj: std::collections::HashMap<String, Vec<Relation>> = std::collections::HashMap::new();
-    for b in &g.beliefs {
-        let Some(r) = &b.relation else { continue };
-        if defeated.contains(&b.id) {
-            continue; // a defeated edge is no longer in force
-        }
-        adj.entry(r.subject.clone()).or_default().push(r.clone());
-        if r.object != r.subject {
-            adj.entry(r.object.clone()).or_default().push(r.clone()); // avoid double-add on self-anchored edges (forget)
-        }
-    }
-    adj
-}
-
 /// Surfacing-stage duplicate fold map: member-id → representative-id, built from CURRENT
 /// (undefeated) `same-as` edges (member→rep). Transitive with a hop guard, so a chain
 /// m → x → rep resolves all the way to the final representative. Truth/frontier are untouched —
 /// this only governs which of a duplicate cluster takes the one display slot at recall. Returns
 /// (map, absorbed_counts) where absorbed_counts[rep] = how many members fold behind it.
-fn collapse_map(g: &Graph) -> (HashMap<String, String>, HashMap<String, usize>) {
-    let defeated = g.defeated();
+fn collapse_map(
+    g: &Graph,
+    defeated: &std::collections::HashSet<String>,
+) -> (HashMap<String, String>, HashMap<String, usize>) {
     // direct member → rep links from in-force `same-as` edges
     let mut direct: HashMap<String, String> = HashMap::new();
-    for b in &g.beliefs {
-        let Some(r) = &b.relation else { continue };
+    for (b, r) in g.relations() {
         if defeated.contains(&b.id) || !r.kind.is_collapsing() {
             continue; // only CURRENT collapse edges fold
         }
@@ -828,7 +800,7 @@ fn consolidate(dir: &PathBuf, new_id: &str, scope: &str, hints: &[Hint]) -> usiz
         Err(_) => return 0,
     };
     let sg = scoped_graph(&g, &active_scopes());
-    let Some(new) = sg.beliefs.iter().find(|b| b.id == new_id) else {
+    let Some(new) = sg.by_id(new_id) else {
         return 0;
     };
     let oll = memory_embed::Ollama::from_env();
@@ -867,7 +839,7 @@ fn cmd_consolidate(args: &[String]) {
         Err(_) => { println!("No memories yet."); return; }
     };
     let sg = scoped_graph(&g, &scopes);
-    let content: Vec<&Belief> = sg.beliefs.iter().filter(|b| b.relation.is_none()).collect();
+    let content: Vec<&Belief> = sg.content().collect();
     if content.is_empty() {
         println!("Nothing to consolidate in scope ({}).", scopes.join(", "));
         return;
@@ -926,9 +898,7 @@ fn cmd_reduce(args: &[String]) {
         Err(_) => { println!("No memories yet."); return; }
     };
     let sg = scoped_graph(&g, &scopes);
-    let defeated = sg.defeated();
-    let current: Vec<&Belief> =
-        sg.beliefs.iter().filter(|b| !defeated.contains(&b.id) && b.relation.is_none()).collect();
+    let current = sg.current_content(&sg.defeated());
     if current.len() < 2 {
         println!("Need at least 2 current beliefs in scope to reduce.");
         return;
@@ -965,7 +935,7 @@ fn cmd_reduce(args: &[String]) {
         println!("No duplicates to collapse in scope ({}).", scopes.join(", "));
         return;
     }
-    let slug_of = |id: &str| sg.beliefs.iter().find(|b| b.id == id).map(|b| b.slug.clone());
+    let slug_of = |id: &str| sg.by_id(id).map(|b| b.slug.clone());
 
     if dry_run {
         for p in &proposals {
@@ -981,9 +951,7 @@ fn cmd_reduce(args: &[String]) {
     let mut folded = 0usize;
     for p in &proposals {
         let scope = sg
-            .beliefs
-            .iter()
-            .find(|b| b.id == p.subject)
+            .by_id(&p.subject)
             .map(|b| belief_scope(b).to_string())
             .unwrap_or_else(|| "global".into());
         folded += Consolidator::commit(&dir, std::slice::from_ref(p), &scope);
@@ -1014,7 +982,7 @@ fn cmd_dream(args: &[String]) {
         Err(_) => { println!("No memories yet."); return; }
     };
     let sg = scoped_graph(&g, &scopes);
-    let content: Vec<&Belief> = sg.beliefs.iter().filter(|b| b.relation.is_none()).collect();
+    let content: Vec<&Belief> = sg.content().collect();
     if content.len() < 2 {
         println!("Need at least 2 beliefs in scope to dream.");
         return;
@@ -1421,7 +1389,6 @@ fn belief_scope(b: &Belief) -> &str {
 /// resolution is scope-relative — branch-scoped supersedes only bite when that branch is active.
 fn scoped_graph(g: &Graph, scopes: &[String]) -> Graph {
     let sub: Vec<Belief> = g
-        .beliefs
         .iter()
         .filter(|b| scopes.iter().any(|s| s == belief_scope(b)))
         .cloned()
@@ -1524,7 +1491,7 @@ mod tests {
             same_as_edge("e1", "b_m1", "b_rep"),
             same_as_edge("e2", "b_m2", "b_rep"),
         ]);
-        let (map, counts) = collapse_map(&g);
+        let (map, counts) = collapse_map(&g, &g.defeated());
         assert_eq!(map.get("b_m1"), Some(&"b_rep".to_string()));
         assert_eq!(map.get("b_m2"), Some(&"b_rep".to_string()));
         assert_eq!(map.get("b_rep"), None, "the rep is not folded onto anything");
@@ -1541,7 +1508,7 @@ mod tests {
             same_as_edge("e1", "b_x", "b_rep"),
             same_as_edge("e2", "b_m", "b_x"),
         ]);
-        let (map, _counts) = collapse_map(&g);
+        let (map, _counts) = collapse_map(&g, &g.defeated());
         assert_eq!(map.get("b_m"), Some(&"b_rep".to_string()), "chain resolves to the final rep");
         assert_eq!(map.get("b_x"), Some(&"b_rep".to_string()));
     }
