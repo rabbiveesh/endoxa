@@ -57,6 +57,24 @@ Wiring it into an agent is two lines of system prompt:
 > `mem remember "<the point>"`. State things as they are now — the system supersedes
 > outdated beliefs automatically.
 
+## Onboarding a repo
+
+Taking endoxa to a repo it has never seen is a tiered harvest of the **out-of-band**
+knowledge — reverts, decision rationale in commit bodies, long-surviving kludges —
+followed by a human gate:
+
+```sh
+mem onboard                # tier 0: deterministic git harvest → leads (not beliefs)
+mem onboard --escalate 30  # tier 1: local model drafts claims from the best leads
+# review drafts.md, prune drafts.json — the gate is yours
+mem onboard --commit       # kept drafts land in repo canon, conservatively weighted
+mem consolidate && mem reduce
+```
+
+The full operator's guide — including when *not* to bother (the measured "legibility
+law": memory's payoff is inversely proportional to how well-documented the repo
+already is) — is in [docs/onboarding-a-repo.md](docs/onboarding-a-repo.md).
+
 ## What's here
 
 - `crates/memory-core` — the deterministic heart: belief model, loader, frontier resolver,
@@ -73,11 +91,16 @@ Wiring it into an agent is two lines of system prompt:
   tiers, and storage-backend notes (including spikes of LadybugDB and DuckDB as derived
   indexes — verdict: flat files win until a few thousand beliefs).
 
-## Status
+## Status & roadmap
 
 Research substrate under active development. The belief-file format (L0) is the durable
 contract; indices, linkers, and prompts above it are deliberately disposable. Expect churn
 everywhere except the files.
+
+Where it's headed — onboarding currency (`valid_time` + HEAD verification), tiers 2–3,
+bitemporality, pluggable relation semantics, the measured scale path (binary vector
+sidecar → DuckDB+vss derived index), worlds/reliving, and evals at the scale where
+frontier resolution is the only honest option — is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 
