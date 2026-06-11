@@ -78,3 +78,12 @@ Wiring it into an agent is two lines of system prompt:
 Research substrate under active development. The belief-file format (L0) is the durable
 contract; indices, linkers, and prompts above it are deliberately disposable. Expect churn
 everywhere except the files.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT), at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for
+inclusion in this work by you, as defined in the Apache-2.0 license, shall be dual
+licensed as above, without any additional terms or conditions.
