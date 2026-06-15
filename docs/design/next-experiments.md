@@ -62,7 +62,13 @@ rough *effort*, and a *done-when* gate.
 
 ## P1 — Validated-gap closers (small, the verdict named the exact fix)
 
-### N5. `blocked_on` deficiency edge (V6 / §3b) — *blocked on having debt beliefs*
+### ✅ N5. `blocked_on` deficiency edge (V6 / §3b) — DONE (2026-06-15)
+> **Shipped.** The deficiency axis is complete end-to-end: `Belief.deficiency` (severity/
+> forcing_constraint/revisit_when) parses; **Tier-2 onboarding** (`mem onboard --tier2`, model via
+> `TIER2_MODEL`) extracts deficiency structure from debt leads (verified live on endoxa's history
+> with gemma2:9b); **`mem debt [<query>]`** is the known-debt query; and a `blocked_on` edge (authored
+> via `mem link … blocked_on …`) **auto-resurfaces** the debt with `⚠ RESURFACED` when its forcing-
+> constraint belief is later defeated. Verified end-to-end. The original entry follows.
 - **Why:** the deficiency axis needs auto-resurface; an `Annotate` `blocked_on` edge to the constraint
   belief composes with `adjacency(&defeated)` for free.
 - **First step:** add the edge kind (Annotate semantics — must NOT defeat); a recall lens that walks

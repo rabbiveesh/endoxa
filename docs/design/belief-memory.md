@@ -272,10 +272,12 @@ Implications:
 - **Entrenchment ⊥ deficiency.** A belief can be maximally entrenched (definitely
   true) *and* maximally deficient (definitely should change). Two independent axes;
   confidence/entrenchment says nothing about *quality*.
-- `HOLE §3b → V6` (RESOLVED): **edge.** A `blocked_on` edge (Annotate semantics — it must NOT
-  defeat, the debt is true-and-live) to the constraint belief; when the constraint is later defeated,
-  a recall lens walks incoming `blocked_on` via `adjacency(&defeated)` and auto-resurfaces the debt.
-  Still *unvalidated* — 0 deficiency beliefs in either store until R4 harvests them.
+- `HOLE §3b → V6 / N5` (RESOLVED + SHIPPED): **edge.** A `blocked_on` edge (Annotate semantics — it
+  must NOT defeat, the debt is true-and-live) to the constraint belief; when the constraint is later
+  defeated, `mem debt` walks `blocked_on` via `adjacency(&defeated)` and auto-resurfaces the debt
+  (`⚠ RESURFACED`). Now implemented end-to-end: `Belief.deficiency` parses; **Tier-2 onboarding**
+  (`mem onboard --tier2`) generates deficiency beliefs from debt leads; **`mem debt`** is the
+  known-debt query. Verified live (gemma2:9b extraction on endoxa; link→forget→resurface).
 
 > **Intent-dependent frontier (companion R4 finding).** The *design-rationale*
 > flavor showed the dual: a "why X over Y" ask needs the **rejected alternative**
