@@ -12,7 +12,7 @@
 use memory_consolidate::{novelty_pair_key, Consolidator, NoveltyDreamer, Orchestrator, ProbeRecord, Reducer};
 use memory_core::{
     content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, Graph, Hint, LinkCtx,
-    LinkProposal, Relation,
+    LinkProposal, Relation, StructuralConfidence,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -192,16 +192,20 @@ fn cmd_recall(args: &[String]) {
         println!("Nothing current recalled for \"{query}\".");
         return;
     }
-    // Current-edge index (drives both the corroboration boost and the affordances below).
+    // Current-edge index (drives the affordances below).
     let adj = sg.adjacency(&defeated);
-    // BOOST (surfacing-stage): lift well-corroborated hits by their incoming `supports` count.
-    // A gentle, capped, multiplicative nudge on the cosine score — re-rank BEFORE we truncate so
-    // the boost can pull a well-supported near-tie into the top-N, but never leapfrog a clearly
-    // nearer hit. Lexical fallback (None scores) is left untouched. Truth is unchanged.
+    // CONFIDENCE BOOST (surfacing-stage, V1): gently re-rank current hits by their STRUCTURAL
+    // confidence weight — directness × source_weight × corroboration × recency — not corroboration
+    // alone. V1 measured recency + directness as load-bearing (the supports-only boost missed them).
+    // Capped + multiplicative so a higher-confidence belief pulls a near-tie into the top-N but never
+    // leapfrogs a clearly-nearer hit (semantic similarity stays dominant). Re-rank BEFORE truncate.
+    // Lexical fallback (None scores) is left untouched. Truth/frontier are unchanged.
+    let conf = StructuralConfidence::build(&sg, &defeated);
     for (id, _slug, _claim, score) in hits.iter_mut() {
         if let Some(s) = score {
-            let raw = adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]);
-            *s *= support_boost(incoming_supports(id, raw));
+            if let Some(b) = sg.by_id(id) {
+                *s *= confidence_boost(conf.weight(b));
+            }
         }
     }
     hits.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
@@ -248,10 +252,23 @@ fn cmd_recall(args: &[String]) {
         }
         let tag = if aff.is_empty() { String::new() } else { format!("   ({aff} → mem expand)") };
         // Name what it conflicts with (the other endpoint of the attacks edge), falling back to a
-        // bare flag if we somehow can't resolve a slug.
+        // bare flag if we somehow can't resolve a slug. Carry the Dubois–Prade ⟨necessity,possibility⟩
+        // band (V1 affordance, carry-don't-drive): a contested CURRENT belief keeps its necessity but
+        // shows a depressed possibility — the honest "still current, but under live attack" signal.
         let warn = if contested {
             let named = contest_str(id, &edges, &slug_of);
-            if named.is_empty() { "  ⚠ contested".to_string() } else { format!("  ⚠ {named}") }
+            let band = sg
+                .by_id(id)
+                .map(|b| {
+                    let (poss, nec) = conf.possibility_necessity(b);
+                    format!(" [nec {nec:.2}·poss {poss:.2}]")
+                })
+                .unwrap_or_default();
+            if named.is_empty() {
+                format!("  ⚠ contested{band}")
+            } else {
+                format!("  ⚠ {named}{band}")
+            }
         } else {
             String::new()
         };
@@ -743,28 +760,15 @@ fn affordance_str(edges: &[Relation]) -> (String, bool) {
     (parts.join(" · "), contested)
 }
 
-/// SURFACING-STAGE boost. Count of *current* incoming `supports` edges (object == anchor) — i.e.
-/// how many undefeated beliefs corroborate this one. Entrenchment, not a self-rated confidence
-/// field: "there is no gold, only entrenchment". Only `supports` (not refines/derived_from) counts.
-fn incoming_supports(anchor: &str, edges: &[Relation]) -> usize {
-    edges
-        .iter()
-        .filter(|r| r.kind == EdgeKind::Supports && r.object == anchor)
-        .count()
-}
-
-/// Capped, saturating, MULTIPLICATIVE corroboration nudge for the cosine score. Returns a factor
-/// in [1.0, 1.0+SUPPORT_BOOST_CAP] that grows with the count of incoming `supports` but never lets
-/// a far-but-supported belief leapfrog a clearly-nearer one — semantic similarity stays dominant.
-/// Saturates: 1 supporter buys most of the lift, each extra supporter buys diminishingly less.
-fn support_boost(n_supports: usize) -> f32 {
-    const SUPPORT_BOOST_CAP: f32 = 0.12; // ≤12% — a gentle tie-breaker, not a re-ranking
-    if n_supports == 0 {
-        return 1.0;
-    }
-    // 1 - 1/(1+n): 0.50 @1, 0.67 @2, 0.75 @3, 0.80 @4 … → 1.0 as n→∞. Saturating by construction.
-    let saturating = 1.0 - 1.0 / (1.0 + n_supports as f32);
-    1.0 + SUPPORT_BOOST_CAP * saturating
+/// SURFACING-STAGE confidence nudge for the cosine score (V1). `w` is a belief's structural
+/// confidence weight in [0,1] (`StructuralConfidence::weight` — directness × source_weight ×
+/// corroboration × recency). Returns a multiplicative factor in [1.0, 1.0+CONFIDENCE_BOOST_CAP],
+/// linear in `w`: a higher-confidence belief floats up on a near-tie but, capped at ≤12%, never lets
+/// a far belief leapfrog a clearly-nearer one — semantic similarity stays dominant. Replaces the old
+/// supports-only boost (V1: recency + directness are load-bearing, not just corroboration count).
+fn confidence_boost(w: f32) -> f32 {
+    const CONFIDENCE_BOOST_CAP: f32 = 0.12; // ≤12% — a gentle tie-breaker, not a re-ranking
+    1.0 + CONFIDENCE_BOOST_CAP * w.clamp(0.0, 1.0)
 }
 
 /// Name what a hit conflicts with: the slug(s) on the other endpoint of any current `attacks` edge
@@ -1563,45 +1567,29 @@ mod tests {
     }
 
     #[test]
-    fn incoming_supports_counts_only_incoming_supports() {
-        let rels = vec![
-            rel("supports", "S1", "A"),   // incoming support → counts
-            rel("supports", "S2", "A"),   // incoming support → counts
-            rel("supports", "A", "X"),    // OUTGOING support → does not count
-            rel("refines", "R", "A"),     // wrong kind → does not count
-            rel("attacks", "K", "A"),     // wrong kind → does not count
-        ];
-        assert_eq!(incoming_supports("A", &rels), 2);
-        assert_eq!(incoming_supports("X", &[rel("supports", "A", "X")]), 1);
+    fn confidence_boost_is_monotone_and_capped() {
+        // factor grows with structural weight, bounded in [1.0, 1.12].
+        let b0 = confidence_boost(0.0);
+        let bmid = confidence_boost(0.5);
+        let bmax = confidence_boost(1.0);
+        assert_eq!(b0, 1.0, "zero-confidence → no boost");
+        assert!(bmid > b0 && bmax > bmid, "higher confidence ⇒ higher boost");
+        assert!(bmax <= 1.12 + 1e-6, "boost is capped at ≤12%");
+        assert_eq!(confidence_boost(5.0), bmax, "weight is clamped to 1.0");
     }
 
     #[test]
-    fn more_incoming_supports_yields_higher_boost() {
-        // monotone non-decreasing, strictly higher for more corroboration, and capped+saturating
-        let b0 = support_boost(0);
-        let b1 = support_boost(1);
-        let b2 = support_boost(2);
-        let b5 = support_boost(5);
-        assert_eq!(b0, 1.0, "no supporters → no boost");
-        assert!(b1 > b0 && b2 > b1 && b5 > b2, "more supporters ⇒ strictly higher boost");
-        // capped: never more than ~12% even with absurd corroboration
-        assert!(support_boost(10_000) <= 1.12 + 1e-6, "boost is capped");
-        // saturating: the first supporter buys more than the gap from 4→5
-        assert!((b1 - b0) > (support_boost(5) - support_boost(4)), "boost saturates");
-    }
+    fn nearer_hit_still_outranks_far_but_confident_one() {
+        // A clearly-nearer belief (cosine 0.80, low confidence) must beat a far one (0.62) even when
+        // the far one is maximally confident — similarity stays dominant.
+        let near = 0.80f32 * confidence_boost(0.0);
+        let far_confident = 0.62f32 * confidence_boost(1.0);
+        assert!(near > far_confident, "boost must not let a far belief leapfrog a clearly nearer one");
 
-    #[test]
-    fn nearer_hit_still_outranks_far_but_supported_one() {
-        // A clearly-nearer belief (cosine 0.80, no support) must beat a far one (0.62) even when
-        // the far one is heavily corroborated — similarity stays dominant.
-        let near = 0.80f32 * support_boost(0);
-        let far_supported = 0.62f32 * support_boost(50);
-        assert!(near > far_supported, "boost must not let a far belief leapfrog a clearly nearer one");
-
-        // But it DOES break a near-tie: 0.70 with 3 supporters beats a bare 0.70.
-        let tie_a = 0.70f32 * support_boost(3);
-        let tie_b = 0.70f32 * support_boost(0);
-        assert!(tie_a > tie_b, "corroboration breaks a near-tie");
+        // But it DOES break a near-tie: 0.70 high-confidence beats a bare 0.70 low-confidence.
+        let tie_a = 0.70f32 * confidence_boost(0.9);
+        let tie_b = 0.70f32 * confidence_boost(0.1);
+        assert!(tie_a > tie_b, "confidence breaks a near-tie");
     }
 
     #[test]

@@ -5,6 +5,9 @@
 //! and value types (impls live in `memory-consolidate`; the trait stays here so it pulls no
 //! LLM into core). First cut is hacky above L0; the belief *file format* is the durable part.
 
+pub mod confidence;
+pub use confidence::StructuralConfidence;
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
