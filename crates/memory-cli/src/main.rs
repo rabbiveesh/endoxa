@@ -100,7 +100,7 @@ fn main() {
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
             eprintln!("  mem review [--limit N]        # list edges flagged for frontier review (candidate depends_on)");
             eprintln!("  mem link <subj> <kind> <obj> [--rationale R]  # author a durable edge (frontier/human adjudication)");
-            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--commit]  # lead harvest → claim drafts → store");
+            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--tier2] [--commit]  # lead harvest → claim drafts (+§3b debt envelope) → store");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -1314,6 +1314,7 @@ fn cmd_onboard(args: &[String]) {
     let mut top = 25usize;
     let mut escalate = 0usize;
     let mut commit = false;
+    let mut tier2 = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1329,6 +1330,7 @@ fn cmd_onboard(args: &[String]) {
                 escalate = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(30);
                 i += 1;
             }
+            "--tier2" => tier2 = true,
             "--commit" => commit = true,
             a if !a.starts_with("--") => repo = PathBuf::from(a),
             _ => {}
@@ -1379,11 +1381,24 @@ fn cmd_onboard(args: &[String]) {
         let model = std::env::var("JUDGE_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into());
         let picked = memory_onboard::select_for_escalation(&h.leads, escalate);
         eprintln!("escalating {} lead(s) through {model} ...", picked.len());
+        // Tier-2 model: a stronger/extractive model for the deficiency structure (gemma2:9b is a
+        // good fit — extraction wants recall, and this is NOT the dangerous depends_on judgment).
+        let tier2_model = std::env::var("TIER2_MODEL").unwrap_or_else(|_| model.clone());
         let mut drafts = Vec::new();
         let mut failed = 0;
+        let mut enriched = 0;
         for (i, lead) in picked.iter().enumerate() {
             match memory_onboard::escalate_lead(&repo, lead, &url, &model) {
-                Ok(d) => drafts.push(d),
+                Ok(mut d) => {
+                    // TIER 2: for kept DEBT-shaped drafts, extract the deficiency envelope (§3b).
+                    if tier2 && d.keep && d.shape == "debt" {
+                        memory_onboard::enrich_deficiency(&repo, &mut d, &url, &tier2_model);
+                        if !d.def_forcing.is_empty() {
+                            enriched += 1;
+                        }
+                    }
+                    drafts.push(d);
+                }
                 Err(e) => {
                     failed += 1;
                     eprintln!("  lead {} failed: {e}", i + 1);
@@ -1392,6 +1407,9 @@ fn cmd_onboard(args: &[String]) {
             eprint!("\r  {}/{}", i + 1, picked.len());
         }
         eprintln!();
+        if tier2 {
+            eprintln!("tier 2: {enriched} debt draft(s) given a deficiency envelope ({tier2_model})");
+        }
         let kept = drafts.iter().filter(|d| d.keep && !d.claim.is_empty()).count();
         let dj = out_dir.join("drafts.json");
         let dm = out_dir.join("drafts.md");
@@ -1469,6 +1487,16 @@ fn onboard_belief_md(id: &str, scope: &str, d: &memory_onboard::Draft, model: &s
         "confidence:\n  directness: inferred\n  observation_count: 1\n  source_weight: 0.5\n  asserted: {:.2}\n",
         d.asserted
     ));
+    // TIER-2 deficiency envelope (§3b): emitted only for debt drafts that yielded a forcing
+    // constraint. Orthogonal to confidence — this belief is true AND a known compromise.
+    if !d.def_forcing.is_empty() {
+        let sev = if d.def_severity.is_empty() { "medium" } else { &d.def_severity };
+        fm.push_str(&format!("deficiency:\n  severity: {sev}\n  forcing_constraint: {}\n", d.def_forcing.replace('\n', " ")));
+        match &d.def_revisit {
+            Some(rw) => fm.push_str(&format!("  revisit_when: {}\n", rw.replace('\n', " "))),
+            None => fm.push_str("  revisit_when: null\n"),
+        }
+    }
     fm.push_str("edges: []\ncoord: null\n---\n\n");
     fm.push_str(&format!("{}\n\nLead: {} ({})\n", d.why, d.lead.title, d.lead.date));
     if !d.lead.evidence.is_empty() {
