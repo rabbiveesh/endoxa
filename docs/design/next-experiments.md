@@ -168,6 +168,13 @@ on something only a human can resolve, so the autonomous pass stops here. The fo
 - **N8 (Linker A/B) — the real next experiment**, but it's an L-effort experiment (needs N8a corpus
   normalization), not a locked-in winner to wire — it belongs in a workflow pass, not this one.
 
+## Adjacent proposals (not verdict-driven)
+
+- **[lazy-background-work.md](lazy-background-work.md)** — daemon-less opportunistic consolidation:
+  the CLI checks if a worker pass (`consolidate`/`dream`) is due and kicks it off detached, instead
+  of an always-running daemon. Assessment + build spec. Fits the per-invocation / sleep-stage model;
+  the delivery mechanism for the existing NREM/REM linkers.
+
 ## Housekeeping
 
 - **Scratch branches** hold the experiment code: `exp/conf` (`worktree-wf_…-1`), `exp/salience-l2`,
