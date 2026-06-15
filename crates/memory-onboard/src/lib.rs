@@ -775,8 +775,9 @@ belief states a compromise/kludge/limitation that is TRUE and CURRENT but should
 evidence extract: \"severity\" (low|medium|high by blast radius — low=cosmetic/local, \
 high=correctness or wide reach), \"forcing_constraint\" (the EXTERNAL reason the debt is accepted — \
 a missing upstream feature, a platform limit, a compatibility need; NOT a restatement of the kludge \
-itself), and \"revisit_when\" (the condition under which to rework it — e.g. 'when <upstream> ships \
-<fix>'; null if none is stated or implied). Ground every field in the evidence; never invent a \
+itself), and \"revisit_when\" (the SPECIFIC real condition under which to rework it, naming the \
+actual upstream/feature from the evidence — null if none is stated or implied; output a real \
+condition or null, NEVER a placeholder template). Ground every field in the evidence; never invent a \
 constraint. If there is no genuine external forcing constraint, return forcing_constraint:\"\". \
 Reply ONLY JSON {\"severity\":\"low|medium|high\",\"forcing_constraint\":\"...\",\"revisit_when\":\"... or null\"}.";
 
