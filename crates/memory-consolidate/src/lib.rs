@@ -415,6 +415,18 @@ Answer depends=true ONLY if A is a conclusion DERIVED from B with no independent
 own. If A has any independent basis (it's a directly observed fact, or stands without B), answer \
 false. Reply JSON {\"depends\": true|false}";
 
+/// Frontier-review aid (safe, never commits): does `model` think belief A rests ENTIRELY on belief B
+/// — a JTMS dependency? `mem review` uses this to ANNOTATE candidates so the frontier agent can
+/// prioritize. Returns None if the model is unavailable. A high-recall model (e.g. gemma2:9b) is a
+/// good candidate flagger here precisely because its false positives become review items a human
+/// rejects, not committed edges.
+pub fn model_thinks_depends(url: &str, model: &str, a: &str, b: &str) -> Option<bool> {
+    let vu = format!("A: {a}\nB: {b}");
+    memory_embed::chat_json(url, model, DEPENDS_VERIFY_SYSTEM, &vu)
+        .ok()
+        .and_then(|x| x.get("depends").and_then(|o| o.as_bool()))
+}
+
 /// V5 discipline: admit a `depends_on` ONLY when the dependent A is itself a derivation —
 /// `directness` inferred or reduced. A `stated` belief is a direct observation (independently
 /// grounded), so a judge's depends_on on it is downgraded to `supports`. Empty/unknown directness is
@@ -510,15 +522,15 @@ impl Linker for JudgmentLinker {
             // the justification contract): (1) directness — A must itself be a derivation
             // (inferred/reduced), never an independently-grounded `stated` fact; (2) an adversarial
             // verify that A truly rests entirely on B. confidence must not be weak.
-            // depends_on (JTMS, V5/N4): high-stakes — it can RETRACT A when its justification B dies.
-            // Two high-precision routes in:
-            //  (a) the n-way judge said depends_on → ADMIT only if A is a derivation (directness gate),
-            //      confidence isn't weak, AND a focused binary verify confirms A rests entirely on B;
-            //      else downgrade to plain supports (same direction, drops the JTMS contract).
-            //  (b) ESCALATION (opt-in via DEPENDS_MODEL): the base judge misses depends_on at the n-way
-            //      stage (qwen-7b says refines/supports), so when a stronger judge is configured,
-            //      re-adjudicate an admissible supports/refines with the binary verify and UPGRADE on yes.
-            let mut upgrade_note: Option<&str> = None;
+            // depends_on (JTMS, V5/N4): high-stakes — it can RETRACT A when its justification B dies, so
+            // the local judge NEVER auto-commits it. If the n-way judge proposes depends_on directly, it
+            // is admitted only when A is a derivation (directness gate), confidence isn't weak, AND a
+            // focused binary verify confirms A rests entirely on B; otherwise it downgrades to plain
+            // supports. We do NOT escalate supports/refines INTO depends_on from a local model: the A/B
+            // (2026-06-15) measured qwen at 0/4 recall and gemma2:9b at 1/4 specificity (it calls
+            // CI→GitHub a dependency) — no 8GB-class model is both high-recall and safe, and a false
+            // depends_on wrongly retracts an independently-grounded belief. depends_on is authored by the
+            // FRONTIER agent via `mem review` + `mem link`; a local DEPENDS_MODEL only ANNOTATES review.
             if matches!(kind, EdgeKind::DependsOn) {
                 let admit = depends_on_admissible(&ctx.new.directness)
                     && conf != Confidence::Weak
@@ -527,19 +539,11 @@ impl Linker for JudgmentLinker {
                     kind = EdgeKind::Supports;
                     downgrade_to = Some("A is independently grounded — corroboration, not justification");
                 }
-            } else if self.depends_model.is_some()
-                && matches!(kind, EdgeKind::Supports | EdgeKind::Refines)
-                && depends_on_admissible(&ctx.new.directness)
-                && self.rests_entirely_on(&ctx.new.claim, &b.claim)
-            {
-                kind = EdgeKind::DependsOn;
-                upgrade_note = Some("A rests entirely on B (stronger-judge escalation)");
             }
             let rationale = v.get("rationale").and_then(|x| x.as_str()).unwrap_or("");
-            let rationale = match (downgrade_to, upgrade_note) {
-                (Some(why), _) => format!("judge: downgraded {judged}→{} ({why}): {rationale}", kind.as_str()),
-                (None, Some(why)) => format!("judge: upgraded {judged}→depends_on ({why}): {rationale}"),
-                (None, None) => format!("judge: {rationale}"),
+            let rationale = match downgrade_to {
+                Some(why) => format!("judge: downgraded {judged}→{} ({why}): {rationale}", kind.as_str()),
+                None => format!("judge: {rationale}"),
             };
             out.push(LinkProposal {
                 kind,

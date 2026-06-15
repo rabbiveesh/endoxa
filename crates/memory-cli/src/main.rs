@@ -1191,6 +1191,15 @@ fn cmd_review(args: &[String]) {
     }
     let total = cands.len();
     cands.truncate(limit);
+    // Optional local-model annotation (safe — never commits): if DEPENDS_MODEL is set, ask it whether
+    // each candidate is a true dependency so the frontier agent can prioritize. A high-recall model
+    // (gemma2:9b) is the right tool here BECAUSE its false positives are just review items a human
+    // rejects — the opposite of using it to auto-author edges (measured unsafe: 1/4 specificity).
+    let depends_model = std::env::var("DEPENDS_MODEL").ok().filter(|s| !s.trim().is_empty());
+    let oll = memory_embed::Ollama::from_env();
+    if depends_model.is_some() {
+        eprintln!("annotating {} candidate(s) with {} ...", cands.len(), depends_model.as_deref().unwrap());
+    }
     println!(
         "{total} edge(s) flagged for frontier review — candidate justifications (is this a true depends_on?):\n"
     );
@@ -1198,7 +1207,15 @@ fn cmd_review(args: &[String]) {
         let (subj, obj) = (sg.by_id(&c.subject), sg.by_id(&c.object));
         let (ss, sc, sd) = subj.map(|b| (b.slug.as_str(), b.claim.as_str(), b.directness.as_str())).unwrap_or(("?", "?", "?"));
         let (os, oc) = obj.map(|b| (b.slug.as_str(), b.claim.as_str())).unwrap_or(("?", "?"));
-        println!("• [{ss}] --{}--> [{os}]", c.kind);
+        let hint = match &depends_model {
+            Some(m) => match memory_consolidate::model_thinks_depends(&oll.url, m, sc, oc) {
+                Some(true) => "   🤖 model: LIKELY depends — prioritize",
+                Some(false) => "   🤖 model: probably corroboration",
+                None => "",
+            },
+            None => "",
+        };
+        println!("• [{ss}] --{}--> [{os}]{hint}", c.kind);
         println!("    derivation (d={sd}): {}", truncate(sc, 100));
         println!("    ground:           {}", truncate(oc, 100));
         println!("    if [{ss}] holds ONLY because [{os}] is true (it collapses if [{os}] is withdrawn), author it:");
