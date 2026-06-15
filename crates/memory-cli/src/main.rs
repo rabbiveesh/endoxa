@@ -85,6 +85,7 @@ fn main() {
         Some("dream") => cmd_dream(&args[1..]),
         Some("review") => cmd_review(&args[1..]),
         Some("link") => cmd_link(&args[1..]),
+        Some("debt") => cmd_debt(&args[1..]),
         Some("onboard") => cmd_onboard(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
@@ -100,6 +101,7 @@ fn main() {
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
             eprintln!("  mem review [--limit N]        # list edges flagged for frontier review (candidate depends_on)");
             eprintln!("  mem link <subj> <kind> <obj> [--rationale R]  # author a durable edge (frontier/human adjudication)");
+            eprintln!("  mem debt [<query>]            # list known-debt (deficiency) beliefs; ⚠ resurfaces when a blocked_on constraint lifts");
             eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--tier2] [--commit]  # lead harvest → claim drafts (+§3b debt envelope) → store");
             eprintln!("  mem scope");
             std::process::exit(2);
@@ -1302,6 +1304,71 @@ fn cmd_link(args: &[String]) {
             "linked [{subject_ref}] --{}--> [{object_ref}] in scope={scope} (durable; authored by frontier@1).",
             kind.as_str()
         ),
+    }
+}
+
+/// `mem debt [<query>]` — the known-debt query (§3b): "what's hacky / known-deficient around here
+/// that I shouldn't rely on or should fix?" Lists CURRENT beliefs carrying a deficiency envelope,
+/// highest severity first; an optional <query> filters semantically. RESURFACE (N5): a debt whose
+/// `blocked_on` edge points at a now-DEFEATED belief — its forcing constraint was lifted/retracted —
+/// is flagged ⚠, the structural trigger to rework it. Deterministic; no LLM.
+fn cmd_debt(args: &[String]) {
+    let query: String =
+        args.iter().filter(|a| !a.starts_with("--")).cloned().collect::<Vec<_>>().join(" ");
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let defeated = sg.defeated();
+    let mut debts: Vec<&Belief> =
+        sg.current_content(&defeated).into_iter().filter(|b| b.deficiency.is_some()).collect();
+    if debts.is_empty() {
+        println!("No known-debt beliefs in scope ({}).", scopes.join(", "));
+        return;
+    }
+    // optional semantic filter (graceful: if embeddings are missing, show everything)
+    if !query.trim().is_empty() {
+        if let Ok(hits) = rank(&dir, &debts, query.trim()) {
+            let order: Vec<String> = hits.into_iter().map(|(id, _, _, _)| id).collect();
+            debts.retain(|b| order.contains(&b.id));
+            debts.sort_by_key(|b| order.iter().position(|id| id == &b.id).unwrap_or(usize::MAX));
+            debts.truncate(8);
+        }
+    }
+    // severity-first (high → medium → low), then most-recent.
+    let sev_rank = |b: &Belief| match b.deficiency.as_ref().map(|d| d.severity.as_str()) {
+        Some("high") => 0,
+        Some("medium") => 1,
+        _ => 2,
+    };
+    if query.trim().is_empty() {
+        debts.sort_by(|a, b| sev_rank(a).cmp(&sev_rank(b)).then(b.txn_time.cmp(&a.txn_time)));
+    }
+    let adj = sg.adjacency(&defeated);
+    println!("{} known-debt belief(s) [{}]:\n", debts.len(), scopes.join("+"));
+    for b in &debts {
+        let d = b.deficiency.as_ref().unwrap();
+        // resurface: an outgoing `blocked_on` edge whose target (the constraint) is now defeated.
+        let resurfaced: Vec<String> = adj
+            .get(&b.id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .filter(|r| r.kind == EdgeKind::Other("blocked_on".into()) && r.subject == b.id)
+            .filter(|r| defeated.contains(&r.object))
+            .filter_map(|r| sg.by_id(&r.object).map(|x| x.slug.clone()))
+            .collect();
+        println!("• [{}] [{}] {}", d.severity, b.slug, truncate(&b.claim, 90));
+        println!("    forcing: {}", d.forcing_constraint);
+        if let Some(rw) = &d.revisit_when {
+            println!("    revisit: {rw}");
+        }
+        if !resurfaced.is_empty() {
+            println!("    ⚠ RESURFACED — constraint lifted ([{}] retracted); time to rework", resurfaced.join("], ["));
+        }
     }
 }
 
