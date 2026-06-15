@@ -34,9 +34,11 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
 - **`crates/memory-cli`** (`mem`) — the user surface. Subcommands: `remember`, `recall`, `expand`,
   `ask` (the one LLM-on-read path), `forget` (reified `retracts` edge, non-destructive), `promote`
   (lift a branch's beliefs into repo canon), `consolidate` (LLM judge draws edges), `reduce`
-  (duplicate `same-as` fold), `dream` (REM/novelty bridge pass), `onboard`. Runs per-invocation in a
-  repo so it sees LOCAL git state → derives the active scope. `src/bin/eval-qa.rs` is the **template
-  harness** for any corpus+LLM evaluation (loading, embeddings, qwen answer+judge).
+  (duplicate `same-as` fold), `dream` (REM/novelty bridge pass), `review` (frontier-adjudication queue
+  for candidate `depends_on`), `link <s> <kind> <o>` (author a durable `frontier@1` edge), `debt`
+  (known-debt query + `blocked_on` auto-resurface), `onboard [--tier2]`. Runs per-invocation in a repo
+  so it sees LOCAL git state → derives the active scope. Commands print the next step (legible without
+  docs). `src/bin/eval-qa.rs` is the **template harness** for any corpus+LLM evaluation.
 - **`crates/memory-embed`** — ollama-backed embeddings (shells to `curl`, no HTTP crate) + on-disk
   vector cache. `Ollama::from_env()`, `.embed()`, `chat_json(url,model,system,user)`,
   `load_cache(dir,model)` / `save_cache`. Embed model `nomic-embed-text` (asymmetric: docs prefixed
