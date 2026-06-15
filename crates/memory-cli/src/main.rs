@@ -178,12 +178,15 @@ fn cmd_recall(args: &[String]) {
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
         Ok(g) => g,
-        Err(_) => { println!("No memories yet."); return; }
+        Err(_) => { println!("No memories yet. Add one:  mem remember \"<a thing you learned>\""); return; }
     };
     // scope-filter BEFORE resolving the frontier (gives branch divergence for free)
     let sg = scoped_graph(&g, &scopes);
     if sg.is_empty() {
-        println!("No memories in scope ({}).", scopes.join(", "));
+        println!(
+            "Nothing in scope ({}). Add one:  mem remember \"<claim>\"   (or onboard a repo:  mem onboard <repo>)",
+            scopes.join(", ")
+        );
         return;
     }
     let defeated = sg.defeated();
@@ -195,7 +198,11 @@ fn cmd_recall(args: &[String]) {
         Err(reason) => (lexical(&current, &query), format!("lexical fallback ({reason})")),
     };
     if hits.is_empty() {
-        println!("Nothing current recalled for \"{query}\".");
+        if dropped > 0 {
+            println!("Nothing CURRENT for \"{query}\" — but {dropped} matching belief(s) here were superseded/retracted (the answer changed over time).");
+        } else {
+            println!("Nothing recalled for \"{query}\". Try fewer/broader words, or add it:  mem remember \"<claim>\"");
+        }
         return;
     }
     // Current-edge index (drives the affordances below).
@@ -1300,10 +1307,22 @@ fn cmd_link(args: &[String]) {
     };
     match Consolidator::commit(&dir, std::slice::from_ref(&proposal), &scope) {
         0 => println!("[{subject_ref}] --{}--> [{object_ref}] already linked.", kind.as_str()),
-        _ => println!(
-            "linked [{subject_ref}] --{}--> [{object_ref}] in scope={scope} (durable; authored by frontier@1).",
-            kind.as_str()
-        ),
+        _ => {
+            println!(
+                "linked [{subject_ref}] --{}--> [{object_ref}] in scope={scope} (durable; authored by frontier@1).",
+                kind.as_str()
+            );
+            // Explain the consequence + point onward, so the loop is legible without docs.
+            match kind {
+                EdgeKind::DependsOn => println!(
+                    "→ [{subject_ref}] now retracts automatically if [{object_ref}] is withdrawn (JTMS). Check: mem recall \"{subject_ref}\""
+                ),
+                EdgeKind::Other(ref s) if s == "blocked_on" => println!(
+                    "→ if [{object_ref}] is later retracted (the constraint lifts), [{subject_ref}] resurfaces in: mem debt"
+                ),
+                _ => {}
+            }
+        }
     }
 }
 
@@ -1349,6 +1368,7 @@ fn cmd_debt(args: &[String]) {
     }
     let adj = sg.adjacency(&defeated);
     println!("{} known-debt belief(s) [{}]:\n", debts.len(), scopes.join("+"));
+    let mut any_resurfaced = false;
     for b in &debts {
         let d = b.deficiency.as_ref().unwrap();
         // resurface: an outgoing `blocked_on` edge whose target (the constraint) is now defeated.
@@ -1367,8 +1387,16 @@ fn cmd_debt(args: &[String]) {
             println!("    revisit: {rw}");
         }
         if !resurfaced.is_empty() {
+            any_resurfaced = true;
             println!("    ⚠ RESURFACED — constraint lifted ([{}] retracted); time to rework", resurfaced.join("], ["));
         }
+    }
+    if any_resurfaced {
+        println!(
+            "\n⚠ a RESURFACED debt's forcing constraint has lifted. After reworking the code, retire the debt:\n  mem remember \"<the new, fixed state>\" --supersedes <slug>     (or  mem forget <slug>  if simply gone)"
+        );
+    } else {
+        println!("\n(drill into any debt: mem expand <slug>)");
     }
 }
 
@@ -1441,6 +1469,12 @@ fn cmd_onboard(args: &[String]) {
     );
     println!("report: {}", md_path.display());
     println!("full:   {}", json_path.display());
+    if escalate == 0 && !commit {
+        println!(
+            "\nNext → skim the report, then draft beliefs from the leads:\n  mem onboard {} --escalate 30 --tier2   (--tier2 adds §3b debt envelopes to kludge leads)",
+            repo.display()
+        );
+    }
 
     // tier 1 (opt-in): the judge model drafts a claim per selected lead, or rejects it as noise
     if escalate > 0 {
@@ -1490,6 +1524,12 @@ fn cmd_onboard(args: &[String]) {
             if failed > 0 { format!(", {failed} failed") } else { String::new() }
         );
         println!("drafts: {}", dm.display());
+        println!(
+            "\nNext → review {} and DELETE any junk drafts from {} (commit reads the reviewed JSON), then store the keepers:\n  mem onboard {} --commit",
+            dm.display(),
+            dj.display(),
+            repo.display()
+        );
     }
 
     // commit: kept drafts (from the REVIEWED drafts.json — delete bad lines first) become
@@ -1523,6 +1563,11 @@ fn cmd_onboard(args: &[String]) {
             }
         }
         println!("committed {written} onboarded belief(s) into scope={scope} ({skipped} already present)");
+        if written > 0 {
+            println!(
+                "\nNext → use them:  mem recall \"<topic>\"   ·   mem debt   (known-debt)   ·   mem consolidate   (link them into the graph)"
+            );
+        }
     }
 }
 
