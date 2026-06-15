@@ -72,7 +72,11 @@ rough *effort*, and a *done-when* gate.
 - **Done when:** a harvested debt belief auto-resurfaces in recall after its forcing-constraint belief
   is superseded.
 
-### N6. World `assumption` reaches the reducer (V3)
+### N6. World `assumption` reaches the reducer (V3) — ⏸ PUNTED (2026-06-15)
+> **Flagged for later, pending a use-case discussion.** Decision deferred: before choosing *how* a
+> world/assumption is expressed live (worlds.toml vs a `mem world` command vs branch-scopes-only),
+> settle *what most users actually need* world-relative reduction for. Until then it stays a
+> corpus-only demo. Do not build the live worlds surface yet.
 - **Why:** suppress makes the dissent belief *reachable*; the world's `assumption` is what lets the
   reducer *select* it (3/3). Today the reducer doesn't see the assumption.
 - **First step:** thread `world.assumption` into the L3 reduction prompt when reducing under a non-
@@ -133,9 +137,21 @@ on something only a human can resolve, so the autonomous pass stops here. The fo
   branch scopes (`repo:id@branch`), which carry suppress-like divergence but **no assumption text**.
   Shipping N6 for real use needs a decision on how a world/assumption is expressed live (see the
   question put to the user).
-- **N4 follow-on (make `DependsOn` non-inert) — blocked on a DESIGN FORK.** The edge kind ships, but
-  nothing emits it. V5 forbade auto-promoting `supports`. So *who* authors a `depends_on`, and *how* a
-  Linker tells justification from corroboration, is an open Linker-behavior question with no gold yet.
+- **N4 follow-on (make `DependsOn` non-inert) — IMPLEMENTED + a model-limit finding (2026-06-15).**
+  The `JudgmentLinker` can now emit `depends_on`, high-precision by design: a `depends_on` is admitted
+  only if (1) the dependent's `directness` is `inferred`/`reduced` (never an independently-grounded
+  `stated` fact — V5), AND (2) an adversarial binary verify confirms A rests *entirely* on B;
+  otherwise it downgrades to plain `supports` (same direction, drops the JTMS contract). The full
+  proposal → reified edge-belief → `defeated()` JTMS-retraction path is proven by an integration test.
+  **Finding:** qwen2.5:7b will **not** propose or confirm `depends_on` even for a clean derived
+  conclusion — it stably lands on `refines`/`supports` (n-way) and `depends=false` (binary verify),
+  across temp-0 reruns and prompt variants (definitions, deletion-test, few-shot). This is the V5
+  difficulty made concrete and is the **safe** direction (a false `depends_on` wrongly retracts; a
+  missed one is just the status quo), so we keep the high-precision gate and do **not** prompt-hack the
+  model toward false positives. **Net:** `depends_on` is effectively *human-authored or
+  stronger-judge-authored* until measured otherwise — the open question is whether to wire a stronger
+  `JUDGE_MODEL` for this one judgment, or leave emission to humans. Recall of the qwen path ≈ 0; its
+  precision is the point.
 - **N7 (calibration) — no consumer.** Pure analysis; recall ranking is scale-invariant and doesn't
   need a calibrated probability. Run it only if a downstream consumer of a calibrated number appears.
 - **N8 (Linker A/B) — the real next experiment**, but it's an L-effort experiment (needs N8a corpus
