@@ -185,6 +185,60 @@ code implements (50 edge-beliefs live; a working `Semantic` registry; a tiered/c
 | eda Q6 `derived_from` inline | **Inline — confirmed** | self-provenance, not a claim about two other beliefs; argue it by arguing the reduction |
 | eda Q7 corpus bootstrapping | **Normalize inline → edge-beliefs at ingestion, linker-authored** | corpus has 285 inline edges; live store already reifies — the harness must match to make the Linker A/B reference valid |
 
+## Round 2 (2026-06-15) — N8 + shipped-work validation (workflow `wf_e69a961e`)
+
+After implementing V1–V6, a second workflow ran the **N8 Linker A/B** (the one big unmeasured claim)
+and re-measured the *shipped* N1/N3 against their original verdicts. All four are *high* confidence.
+
+### V7 — Linker edge-quality A/B (N8): the auto-Linker is a WEAK from-scratch edge proposer · branch `exp/n8` (wf-…-1)
+
+**"Invest in the Linker" is NOT supported — and that validates the frontier-review design.** Run from
+scratch over 3 edge-rich corpora (inline edges stripped), the Linker recovers almost none of the gold:
+
+| kind | best F1 (arm) | gold | note |
+|---|---|---|---|
+| supersedes | 0.19 (gemma) / 0.11 (qwen) | 11–12 | only kind above noise |
+| attacks | 0.15 (qwen) | 17 | gemma worse: 0 TP |
+| adjudicates | **0.00** | 13 | the judge prompt has **no `adjudicates` option** — a code gap, never proposed |
+| supports / refines | 0.00 | 17 / 1 | gemma floods 21 bogus `refines` |
+
+- **Keep qwen2.5:7b as the judge; do NOT switch to gemma.** On the shared corpora gemma buys marginally
+  higher supersedes recall (0.18 vs 0.09) at lower precision (0.20 vs 0.33), is ~2–3× slower, emits
+  more junk `refines` (21 vs 8), and is **not safer on defeating kinds** — it produced *more* false
+  defeating edges (10 vs 8). Of qwen's 17 proposed defeating edges only **3 are gold (14 false)** — a
+  false defeating edge silently retracts a belief.
+- **The dominant limit is STRUCTURAL, not the model.** The JudgmentLinker only proposes newer→older,
+  but the corpora's gold edges mostly point older→newer or share identical txn_times → recall *ceiling*
+  0.11 (helix) / 0.12 (sql-abstract) / 0.60 (composr). Two code gaps: the directional gate, and the
+  missing `adjudicates` vocabulary. (Caveat: the txn_time clustering is partly a hand-authored-fixture
+  artifact; a real append-only store gives distinct write-times, so the ceiling would bite less — but
+  composr, with good temporal spread, still caps at F1 ≤ 0.29, so model quality is genuinely binding.)
+- **This is the empirical case for the architecture we built.** The auto-Linker cannot be trusted to
+  draw high-stakes *defeating* edges (P ≈ 0.18, mostly false). So those must be authored by the
+  **frontier agent** (`mem review` → `mem link`) — exactly the path now shipped. The Linker's honest
+  jobs are corroboration/relatedness (proximity) and the high-precision *author-hinted* supersedes,
+  not autonomous verdict-drawing.
+
+### Shipped-work validations (all confirmed the verdicts held in production code)
+
+- **N3 (conflict pass) — CONFIRMED, strongly.** Over 7 real open-conflict neighborhoods the
+  deterministic pass caught **7/7 (100%)** in 3 runs with **0 false-flags** (across 7 conflict + 45
+  control neighborhoods); the LLM-only path named the conflict only **~19%** and silent-picked **~81%**
+  (reproducing V4's 5/6). New finding: silent-pick is *worse* with realistic neighborhoods (3 cosine
+  neighbors dilute the contradiction → 81%) than with the bare pair (57% named) — the deterministic
+  pass is noise-invariant. The shipped N3 catches ~5.7 conflicts/run the LLM buries.
+- **N1 (confidence boost) — CONFIRMED net-positive, zero regressions.** Over 29 gold-slug queries:
+  recall@5 identical at 0.966 across cosine-only / shipped-confidence / old-supports-only (the 12% cap
+  working — never moves the top-5), but shipped confidence lifts nDCG@5 0.899→0.912 and MRR 0.883→0.900,
+  moving the gold rank in 1/29 (an improvement). The **old supports-only boost it replaced regressed
+  2/29** (floated an older well-corroborated belief over the newer correct one) — validating the
+  replacement. The cap is right.
+- **`mem review` heuristic — NOT noisy; the opposite.** Only 3/337 corpus candidates (0.9%) and **0**
+  on the real store — the directness gate (inferred/reduced subject) is very selective, so the queue is
+  cheap to review and can't auto-corrupt the frontier. And the **deficiency axis is confirmed empty**
+  (0 structured `forcing_constraint`/`revisit_when`/`severity` keys anywhere) → **Tier-2 onboarding is
+  needed** to exercise §3b/N5 — now built and validated (see next-experiments.md N5).
+
 ## Cross-cutting lessons
 
 1. **The corpus and the real store stress different things and you need both.** The corpus has a rich

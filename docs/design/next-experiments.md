@@ -102,7 +102,13 @@ rough *effort*, and a *done-when* gate.
 
 ## P2 — The one big experiment still missing
 
-### N8. Linker edge-quality A/B vs the corpus's hand-placed gold edges
+### ✅ N8. Linker edge-quality A/B vs the corpus's hand-placed gold edges — DONE (2026-06-15) → V7
+> **Result: the auto-Linker is a WEAK from-scratch edge proposer (best F1 supersedes 0.19; adjudicates/
+> supports/refines 0.00), and that validates the frontier-review design — high-stakes defeating edges
+> must be authored via `mem review`/`mem link`, not auto-drawn.** Keep qwen2.5:7b (gemma is no safer:
+> more false defeating edges, a flood of junk `refines`). Limit is structural (newer→older gate + a
+> missing `adjudicates` vocabulary option), not just the model. Full numbers in
+> [open-questions-eval.md](open-questions-eval.md) V7. Optional low-priority follow-ons below.
 - **Why:** every V6 verdict pushes structure into the reified edge graph, and the whole edge layer is
   **regenerable by the Linker** — but the Linker's edge quality has **never been scored**. "Invest in
   the Linker" is a direction, not a proven win. This is the highest-uncertainty load-bearing claim left.
