@@ -144,6 +144,61 @@ verified claims this round (the energy + argumentation angles dominated the sear
 open for a follow-up pass; sheaves (inconsistency cohomology) and opinion dynamics (reducer consensus)
 look the most promising of the unexamined set.
 
+## Round-2 research — the uninvestigated formalisms: sheaves + opinion dynamics are ONE winner (verified 3-0)
+
+A second deep-research pass (105 agents, 2.1M tokens) hit the formalisms the first pass skipped. The
+headline, all 3-0 verified against primary sources: **cellular sheaf theory and bounded-confidence
+opinion dynamics are the SAME machinery, and unlike the energy ideas they give endoxa something its
+fixpoint + LLM-reducer demonstrably CANNOT — and it's computable on our finite weighted graph today.**
+
+### S1 — Sheaf `H⁰ = ker(L_F)`: a deterministic, computable CONSISTENCY metric · **compose (run the experiment first)**
+A cellular sheaf assigns a vector space (stalk) to each belief-node/edge + linear restriction maps; the
+**sheaf Laplacian `L_F = δᵀδ`** is a finite symmetric PSD matrix whose **kernel is the space of globally
+consistent belief assignments** (global sections), found by one nullspace computation. So "**is there a
+globally consistent assignment over this belief-set / this world?**" becomes a principled *numeric* test —
+something the stochastic LLM reducer can't give. The continuous version is the **degree-0 Dirichlet
+energy** `E₀(x) = ‖δ₀x‖² = Σ_edges ‖F_{v◁e}x_v − F_{u◁e}x_u‖²` — a scalar **magnitude of inconsistency**
+of a world. `H¹ = coker δ` is the *obstruction* space (genuine inconsistency no assignment resolves).
+*Verified caveat:* "vanishing H⁰ ⇒ no consistent assignment" **overreaches** — the zero section is always
+trivially consistent, so it's about *nontrivial* global sections; use Dirichlet energy as the scalar.
+
+### S2 — Bounded-confidence opinion dynamics: a deterministic MULTI-CLUSTER reducer · **compose — directly attacks the V4 silent-pick failure**
+The opinion-dynamics target is realized *inside the same sheaf framework* as a **nonlinear** Laplacian
+`L^∇U_F x = δᵀ diag(ψ'_e(‖δ_e x‖²)) δx` with a **per-edge confidence threshold `D_e`**: an edge influences
+only while the discrepancy of expressed opinions is below `D_e`. Its equilibria (Hansen–Ghrist Thm 11.1)
+**partition edges into agreeing (active) vs silenced (disagreeing)** — i.e. they yield **multiple
+disagreement clusters, not one blurred average.** This is a *deterministic* reducer that **structurally
+cannot silent-pick** — exactly the V4 failure where the LLM reducer buries a conflict. It's the
+strongest candidate to *complement* the LLM reducer: cluster deterministically, then let the LLM
+verbalize each cluster.
+
+### S3 — Sheaf ≡ opinion dynamics, and signed edges map in for free · **the unifying insight**
+Hansen–Ghrist's opinion model *is* cellular-sheaf semantics (node = private opinion `x_v`, restriction
+map = how it manifests in shared discourse, diffusion = consensus). And endoxa's **signed edges need no
+new mechanism**: a negatively-signed (`attacks`) edge is *one restriction-map sign flip*; the per-edge
+coboundary `(δx)_e` is the computable per-edge inconsistency. Neural Sheaf Diffusion (Bodnar et al.,
+NeurIPS 2022) shows the sheaf geometry is precisely the principled fix for *heterophilic* graphs
+(connected nodes that oppose) = our attacks-edges → **borrow the structure**, not the learned-GNN guarantees.
+
+### Verdict + the cheap experiment (which, per the meta-lesson above, must come BEFORE any build)
+**Compose — but the energy experiments just taught us paper-good ideas die on contact with our data, so
+this one earns the same gate.** The open *design* choice is the **stalk**: the inconsistency metric wants
+belief *embeddings* (768-d) as stalks with identity/sign restriction maps; the multi-cluster reducer
+wants a low-dim *opinion/acceptance* stalk. Two cheap offline experiments:
+1. **Does the Dirichlet inconsistency scalar light up on real conflict?** Compute `E₀` / dim `H¹` over
+   each corpus's signed graph (embeddings as stalks) — does it spike exactly on the known open-conflict
+   beliefs, and does a *world* (a suppressed defeating edge) show measurably different inconsistency than
+   `main`? If the scalar doesn't track the gold conflicts, skip.
+2. **Does the BC reducer produce ≥2 clusters where the LLM silent-picks?** Run threshold-gated dynamics
+   on the 6–7 open-conflict neighborhoods (N3's set) — does it split into the two real sides
+   deterministically? If yes, it's a structural fix for the silent-pick problem the LLM reducer has.
+
+### Not substantiated this pass (unverified, not investigated to a verdict)
+Persistence/TDA, optimal-transport/Wasserstein merging, quantum cognition, RG coarse-graining,
+Ollivier/Forman Ricci curvature, and signed-graph structural-balance — surfaced **no surviving verified
+claims**. Structural balance (frustration in the attacks-graph) and persistence (topology change across
+worlds) are the most likely of these to repay a third, narrower pass; the rest read as metaphor here.
+
 ## Key sources (verified)
 - Ramsauer et al., *Hopfield Networks is All You Need*, arXiv:2008.02217 (ICLR 2021).
 - Santos/Niculae/Martins, *Hopfield–Fenchel–Young Networks*, JMLR 2025 (sparse exact retrieval).
