@@ -10,11 +10,17 @@ Ordering principle: **leverage × forced-by-evidence**. Do the things the data a
 the things the data only suggested. Each item states *why* (the verdict), the *first concrete step*,
 rough *effort*, and a *done-when* gate.
 
+> **Implementation status (2026-06-15, branch `feat/verdict-winners`):** P0 is **done** — N1
+> `a4e1044`→`08cabac` (StructuralConfidence + recall wiring), N2 (standing no-op decision), N3
+> `17c4f67` (deterministic conflict pass), N4 `a4e1044` (DependsOn JTMS edge). All on green tests;
+> `defeated()` is byte-identical on the corpus (additive/inert by construction). **P1/P2 are
+> blocked on decisions or data** — see "Blockers / open questions" at the bottom.
+
 ---
 
 ## P0 — Locked-in winners to implement (the data decided; just build it)
 
-### N1. Confidence as a `ConfidenceModel` trait, default = recency-bearing `StructuralOnly` (V1)
+### ✅ N1. Confidence as a `ConfidenceModel` trait, default = recency-bearing `StructuralOnly` (V1)
 - **Why:** StructuralOnly is the best ranker on both stores (pair-acc 0.93/0.92); recency is
   non-negotiable (ablation → 0.17 on real); `asserted` must not drive ranking.
 - **First step:** lift the experiment's `StructuralOnly` (directness × source_weight × (1+log1p(corrob))
@@ -26,14 +32,14 @@ rough *effort*, and a *done-when* gate.
 - **Carry, don't drive:** store a possibility/necessity pair as a *contested-belief affordance* (the
   recall `⚠ contested` line already exists — back it with `necessity`/`possibility`, not just a flag).
 
-### N2. Kill any L2 frecency temptation; keep cosine + optional light PageRank prior (V2)
+### ✅ N2. Kill any L2 frecency temptation; keep cosine + optional light PageRank prior (V2)
 - **Why:** frecency ossifies (cold-surface 5–10%). PageRank is ungameable but must stay a *light* prior.
 - **First step:** confirm no access-frequency signal leaks into L2 ranking (it doesn't today — good);
   if/when a diversity prior is wanted, add PageRank-over-the-support-graph at blend ≤ 0.15, behind a
   config flag, **off by default** (a 0.3 blend already cost recall 1.00→0.83).
 - **Effort:** S. **Done when:** documented as a closed decision; frecency reserved for L4 cache eviction.
 
-### N3. Frontier pre-filter on the reduction path + a conflict pass (V4) — *gates the trusted reducer*
+### ✅ N3. Frontier pre-filter on the reduction path + a conflict pass (V4) — *gates the trusted reducer*
 - **Why:** qwen2.5:7b @ temp 0 is stable (0.997) but silently adopts contradictions 5/6. The reducer
   is only safe if it never sees the defeated loser **and** flags genuine live conflict.
 - **First step:** ensure `mem ask` / any L3 reducer feeds `current_content(&defeated)` (frontier-
@@ -43,7 +49,7 @@ rough *effort*, and a *done-when* gate.
   on injected contradictions ≥ 5/6; reducer answers never echo a defeated belief.
 - Pin **reducer = qwen2.5:7b @ temperature 0** as the standing default (it isn't, everywhere).
 
-### N4. Add the `DependsOn` edge kind (V5) — add now, inert until linkers emit it
+### ✅ N4. Add the `DependsOn` edge kind (V5) — add now, inert until linkers emit it
 - **Why:** endoxa is TMS-unsound for sole-`supports` (20/20). `DependsOn` (OUT when *all* targets
   defeated) fixes it; but `supports` ≠ justification, so **no auto-promotion** (would over-retract 95%).
 - **First step:** add `EdgeKind::DependsOn` with JTMS defeat-propagation in `Graph::defeated` (the
@@ -108,6 +114,32 @@ rough *effort*, and a *done-when* gate.
   human would maintain by hand.
 
 ---
+
+## Blockers / open questions (the implementation stop point, 2026-06-15)
+
+P0 shipped without a single decision needed — the data forced every choice. Everything past it forks
+on something only a human can resolve, so the autonomous pass stops here. The forks:
+
+- **N5 (`blocked_on` resurface) — blocked on DATA + a UX call.** The edge already works as an
+  `Annotate` kind (any unknown kind is Annotate; `blocked_on` resurfaces nothing only because the
+  resurface *lens* isn't built). But there are **0 deficiency beliefs** in either store, so the lens
+  would be untestable machinery. It also needs the `Deficiency` fields (`severity`,
+  `forcing_constraint`, `revisit_when`) parsed into `Belief` and a UX decision: is a resurfaced debt
+  a recall *filter*, a banner on normal recall, or a dedicated `mem debt` command? **Needs onboarding
+  Tier 2 to generate debt beliefs first.**
+- **N6 (world-relative reducer) — blocked on a DESIGN FORK.** V3 proved the reducer needs each
+  world's `assumption` string to *select* the dissent answer. In the corpus that lives in
+  `worlds.json`. **The live store has no worlds and no assumption surface** — its only world-analog is
+  branch scopes (`repo:id@branch`), which carry suppress-like divergence but **no assumption text**.
+  Shipping N6 for real use needs a decision on how a world/assumption is expressed live (see the
+  question put to the user).
+- **N4 follow-on (make `DependsOn` non-inert) — blocked on a DESIGN FORK.** The edge kind ships, but
+  nothing emits it. V5 forbade auto-promoting `supports`. So *who* authors a `depends_on`, and *how* a
+  Linker tells justification from corroboration, is an open Linker-behavior question with no gold yet.
+- **N7 (calibration) — no consumer.** Pure analysis; recall ranking is scale-invariant and doesn't
+  need a calibrated probability. Run it only if a downstream consumer of a calibrated number appears.
+- **N8 (Linker A/B) — the real next experiment**, but it's an L-effort experiment (needs N8a corpus
+  normalization), not a locked-in winner to wire — it belongs in a workflow pass, not this one.
 
 ## Housekeeping
 
