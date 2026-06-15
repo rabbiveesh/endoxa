@@ -1,6 +1,8 @@
 # Belief-Based Agentic Memory — Design Draft
 
-Status: **draft v0.1** · 2026-06-03 · this is a living doc, holes are marked `TODO` / `HOLE`.
+Status: **draft v0.2** · 2026-06-03 (holes settled 2026-06-15) · living doc, holes marked `HOLE`.
+**Many `HOLE`s are now empirically resolved — see [open-questions-eval.md](open-questions-eval.md)
+for the measured verdicts (V1–V6); inline `HOLE→V#` tags point to them.**
 
 ## 0. One-paragraph thesis
 
@@ -209,20 +211,27 @@ baseline-to-beat, not a default. We still *store* `asserted` (cheap, and a human
 asserted confidence is more meaningful than an LLM's), but the default model
 should be `StructuralOnly` or `Blend`. This is no longer a guess; it's the data.
 
-**Representation sub-choice (open):** what *shape* is confidence? Candidates —
-(i) a single scalar; (ii) a **possibility/necessity pair** (Dubois–Prade) giving
-a two-number "could be true / must be true" band that naturally encodes ignorance;
-(iii) a Subjective-Logic-style ⟨belief, disbelief, uncertainty⟩ triple. Given we
-have *no probabilistic guarantees* (the LLM is stochastic and unbounded), we adopt
-these only as **graded representations**, never as soundness — see §13E.
+**Representation sub-choice → V1 (RESOLVED):** ship the **scalar** as the frontier driver, and
+*additionally* carry a **possibility/necessity pair** (Dubois–Prade) — or the SL triple — as a
+**contested-belief affordance**. Measured: possibility separates contested-vs-uncontested *current*
+beliefs by **+0.503** where the scalar manages only **+0.105** (≈5×). So the scalar is enough to
+rank/drive recall, but the pair earns its keep as the honest "this current belief is under live
+attack" signal a scalar can't encode. Candidates were (i) scalar; (ii) possibility/necessity pair
+giving a "could be true / must be true" band that encodes ignorance; (iii) Subjective-Logic
+⟨belief, disbelief, uncertainty⟩ triple. We adopt these as **graded representations**, never as
+soundness — see §13E.
 
 Because the model is swappable and worlds are branchable (§5), we can run
 `StructuralOnly` in one world and `Blend` in another over the *same* beliefs and
 score both against adjudicated verdicts (§9). Confidence representation becomes a
 measured choice, not an architectural commitment.
 
-`HOLE §3a`: does `ConfidenceModel` belong at L1 (per-belief) or L2 (it can see
-the query context)? Drafted with `ctx`, so L2-aware. Revisit.
+`HOLE §3a → V1` (RESOLVED): **L1 (per-belief).** L2 query-boost is a tie on the fixtures but
+`cosine(defeated) > cosine(current)` in 2/3 conflicted neighborhoods — a proximity boost structurally
+points at the stale loser, so L2 must never flip a frontier verdict. Default model = recency-bearing
+**StructuralOnly** (best ranker, corpus/real pair-acc 0.93/0.92; recency is non-negotiable — ablation
+drops real to 0.17), post-hoc calibrated onto a source-weight prior if a probability is needed.
+`AssertedOnly` is the worst ranker (real pair-acc 0.000) — confirms §13B empirically.
 
 ### 3b. Deficiency / known-debt axis (R4 finding — orthogonal to confidence)
 
@@ -263,10 +272,10 @@ Implications:
 - **Entrenchment ⊥ deficiency.** A belief can be maximally entrenched (definitely
   true) *and* maximally deficient (definitely should change). Two independent axes;
   confidence/entrenchment says nothing about *quality*.
-- `HOLE §3b`: is `revisit_when` free-text, or an edge to the *constraint belief*
-  (so "constraint X lifted" can be detected structurally and auto-resurface the
-  debt)? Leaning edge — it makes the trigger first-class. Possibly a `blocked_on`
-  edge kind (§4).
+- `HOLE §3b → V6` (RESOLVED): **edge.** A `blocked_on` edge (Annotate semantics — it must NOT
+  defeat, the debt is true-and-live) to the constraint belief; when the constraint is later defeated,
+  a recall lens walks incoming `blocked_on` via `adjacency(&defeated)` and auto-resurfaces the debt.
+  Still *unvalidated* — 0 deficiency beliefs in either store until R4 harvests them.
 
 > **Intent-dependent frontier (companion R4 finding).** The *design-rationale*
 > flavor showed the dual: a "why X over Y" ask needs the **rejected alternative**
@@ -289,8 +298,12 @@ pub enum EdgeKind {
     DerivedFrom,     // reducer output → its inputs (also the cache manifest)
     Refines,         // narrows/specializes target without contradicting it
     Adjudicates,     // a VERDICT: closes a conflict, declaring target defeated (see §4a)
-    // HOLE: do we need `DependsOn` (assumption links, ATMS-style) as distinct
-    //       from Supports? probably yes for proper retraction. flagged.
+    // HOLE §4 → V5 (RESOLVED): YES — add `DependsOn` (assumption link, JTMS-style) as DISTINCT from
+    //   Supports. Measured: endoxa is TMS-unsound (20/20 corpus sole-support dependents float when
+    //   their support is retracted); a DependsOn variant (OUT when ALL targets defeated) fixes 20/20,
+    //   cascades correctly, never over-retracts. But do NOT auto-promote sole-`supports` to it —
+    //   19/20 are `directness: stated` (independently grounded), so that over-retracts 95%. `supports`
+    //   is corroboration, not justification. Inert on the real store today (0 supports edges).
 }
 ```
 
@@ -336,9 +349,11 @@ The `source_weight`/`ConfidenceModel` feeds the distance metric. So a `Reducer`'
 verdict strategy is a *choice of merging operator*, and — because it's pluggable —
 another knob the benchmarks (§9) can race.
 
-`HOLE §4a`: is `Adjudicates` enough, or do we need a distinct `Verdict` claim
-variant carrying the rationale + who's bound by it across worlds? Leaning: edge +
-a `Reducer`/`Human`-authored belief holding the rationale.
+`HOLE §4a → V6` (RESOLVED): **edge is enough**, no distinct `Verdict` claim variant. The code
+already ships it (`Adjudicates → Semantic::Defeat` + worlds-suppress + verdict-of-verdict
+reinstatement); rationale + cross-world bindingness ride on the edge-belief's body + author
+(human = non-regenerable anchor). A separate variant would duplicate the envelope the edge already
+carries.
 
 ---
 
@@ -370,15 +385,14 @@ Why this is the right backbone:
 
 Open questions:
 
-- `HOLE §5a` **Merge semantics.** Literal `git merge` with a custom belief merge
-  driver, vs our own DAG merge. Leaning: model is a Merkle DAG regardless;
-  *back* it with real git initially (free history, diff, human-editable,
-  parallel realities) + a custom merge driver for belief conflicts. Revisit if
-  perf bites.
-- `HOLE §5b` Do reductions get committed into the same DAG (as `Reducer`
-  beliefs) or live in a side store? Leaning: same DAG, marked derived, so they
-  can feed higher reductions and be audited — but with a bounded re-reduction
-  cascade (level cap) to stay stable.
+- `HOLE §5a → V6` (RESOLVED): **real git + a thin custom belief merge driver; defer the driver.**
+  Append-only + content-addressed ids ⇒ most merges are conflict-free file unions; real conflicts
+  (two `supersedes` of one target across branches) are exactly the `attacks`/adjudicate case the
+  reducer already handles, so the driver is a shim, not a bespoke DAG algorithm. (Pressure point is
+  embeddings, not the `.md` DAG — per the duckdb spike.)
+- `HOLE §5b → V6` (RESOLVED): **same DAG, marked derived.** Bound the cascade by
+  **exclusion-by-construction, not a level cap** — the Reducer already skips its own `same-as` output
+  so it can't re-enter, which is more robust than an arbitrary depth bound and keeps audit/reliving.
 
 ---
 
@@ -492,9 +506,12 @@ Placement summary:
 - **L4 cache eviction** is where frecency wins with no caveats — keeping hot
   reductions warm is a literal cache-replacement problem (LFU/LRU/frecency), no
   truth axis involved.
-- `HOLE §6a`: if we use any access-frequency signal on L2, add a **cold-belief
-  recall** benchmark (does a relevant-but-rarely-accessed belief still surface?)
-  alongside B7 (§9) to catch ossification.
+- `HOLE §6a → V2` (RESOLVED): the cold-belief benchmark was built and run (300-session simulation,
+  corpus + 274-belief real store). **Verdict: do NOT put retrieval-frecency on L2 — it ossifies hard**
+  (cold-surface rate 5–10%; one belief grabs ~20% of accesses; only 7–18% of beliefs ever surface).
+  Keep cosine as the L2 base; use **PageRank** only as a *light* tie-breaking/diversity prior (it's
+  ungameable and never ossifies, but a 0.3 blend already costs recall 1.00→0.83). Frecency belongs
+  on **L4 cache eviction only**, exactly as this section predicted.
 
 ---
 
@@ -549,8 +566,10 @@ be a subprocess/service in *any* language, while the correctness-critical
 substrate stays in Rust. We get type-encoded layers without fighting Rust for
 LLM glue.
 
-> `HOLE §8a`: embeddings — call out to a service, or in-process (candle)? Lean
-> service for now.
+> `HOLE §8a → V6` (RESOLVED): **service (curl-to-ollama).** The spike showed load is dominated by the
+> 218 ms embeddings-JSON parse, not embed compute — in-process candle wouldn't move the measured
+> bottleneck (a binary vector sidecar would). Keeps core dependency-light + shares the model with the
+> LLM linker/reducer. Revisit only for a no-ollama deploy target.
 
 ---
 
@@ -582,9 +601,11 @@ Two foundational holes evaluation forces us to confront early:
   synthesize a seed corpus (generate a persona, evolve their preferences over a
   timeline, plant contradictions, stamp verdicts). Without this, B2/B4/B5 are
   unmeasurable.
-- `HOLE §9b` **Stability metric definition.** B3 is the gate on whether L3 is
-  trustworthy at all — define "stable enough" (e.g. ≥X% semantic agreement across
-  N reruns) *before* building the reducer.
+- `HOLE §9b → V4` (RESOLVED): **τ = mean pairwise-cosine agreement ≥ 0.85 across k reruns.** Measured:
+  **qwen2.5:7b @ temp 0 = 0.997** (clears τ wide, ~2.1 s/call); temp 0 dominates default for both
+  sizes. **Caveat that gates B2/B5:** stability ≠ trustworthiness — the same cell surfaced an injected
+  contradiction only 1/6 times (silently adopted it 5/6). Fix before trusting: frontier-pre-filter the
+  neighborhood (drop defeated beliefs) + a dedicated conflict pass.
 
 ### 9c. One path to measurability (cost-aware, solo-friendly)
 
@@ -681,16 +702,24 @@ Don't build the cache or the fancy lenses until reduction earns them.
 
 ## 11. Open holes (rolling list)
 
-- `HOLE §3` text-first `Claim` vs typed schema registry.
-- `HOLE §4` `DependsOn` as a distinct assumption edge for clean retraction.
-- `HOLE §5a` merge semantics (real-git + driver vs custom DAG merge).
-- `HOLE §5b` reductions in-DAG vs side store; cascade bound.
-- `HOLE §8a` embeddings in-process vs service.
-- `HOLE` reduction **stability test**: same inputs must reduce the same way
-  enough to trust. Define the metric before building L3.
-- `HOLE` confidence function: exact mapping `ConfidenceInputs + recency → weight`.
-- `HOLE` human contribution UX: how does a human drop a belief in "trivially"?
-  (CLI? file drop? chat command?) — they hold beliefs about the system too.
+Settled 2026-06-15 — full numbers in [open-questions-eval.md](open-questions-eval.md) (V1–V6).
+
+- `HOLE §3` → **V6**: text-first `Claim`, **no** typed schema registry (0/779 beliefs use Triple).
+- `HOLE §4` → **V5**: **add** `DependsOn` (endoxa is TMS-unsound without it); don't auto-promote
+  `supports`.
+- `HOLE §5a` → **V6**: real git + thin belief merge driver (defer the driver).
+- `HOLE §5b` → **V6**: reductions in-DAG; cascade bounded by exclusion-by-construction, not a level cap.
+- `HOLE §8a` → **V6**: embeddings via service (curl-to-ollama); bottleneck is JSON parse, not compute.
+- `HOLE` reduction **stability** → **V4**: τ = pairwise-cosine ≥ 0.85; qwen2.5:7b @ temp 0 = 0.997.
+  (Stable ≠ trustworthy: fix conflict-honesty before the reducer is on the trusted path.)
+- `HOLE` confidence function → **V1**: recency-bearing StructuralOnly (recency non-negotiable),
+  L1 placement, scalar driver + possibility/necessity affordance; don't rank on `asserted`.
+- `HOLE` human contribution UX → **shipped**: the `mem` CLI (`remember`/`forget`/`promote`) is the
+  human write path; a human belief is a peer with high `source_weight`, edges authored by the Linker.
+
+**Still open (next experiments):** Linker edge-quality A/B vs the corpus's hand-placed gold edges
+(the one big unmeasured thing); the conflict-honest reducer fix; proper isotonic calibration of the
+confidence models; validating the §3b `blocked_on` edge once debt beliefs exist.
 
 ---
 
@@ -842,10 +871,13 @@ Takeaways folded into the design:
   `Supersedes`/defeat) and bi-temporal validity (≈ `valid_time` vs `txn_time`,
   §3, and `as_of` reliving, §6). We extend them with confidence, justification
   edges, and worlds.
-- **`HOLE §13a`** (from the pass): is bi-temporal soft-delete *alone* enough to
-  reconstruct prior belief states, or do we still need explicit ATMS-style world
-  labels on top? Our §5 bet is "yes, we need worlds" — but Zep is evidence the
-  weaker model gets you surprisingly far. Worth testing the cheaper option first.
+- **`HOLE §13a → V3`** (RESOLVED): tested the cheaper option first — **it fails. ATMS world-labels
+  are load-bearing.** Bi-temporal/global-frontier-only made the dissent-world answer *reachable* on
+  **0/3** fixtures (a single timeline collapses every world to `main`); suppress-then-refixpoint made
+  it **3/3**, and a qwen2.5:7b reducer fed the world's `assumption` flips its answer world-relatively
+  3/3 (first reducer-behaves-world-relatively demo). Two things are needed: suppress makes the belief
+  *reachable*, the `assumption` lets the reducer *select* it. Live analog: `scope` (`repo@branch`)
+  flips canon beliefs in 3/16 real-store branches. Our §5 bet holds.
 
 ### 13B. LLM confidence calibration — can we trust an asserted float?  ✓ verified
 
