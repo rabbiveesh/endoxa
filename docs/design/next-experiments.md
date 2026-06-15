@@ -152,6 +152,17 @@ on something only a human can resolve, so the autonomous pass stops here. The fo
   stronger-judge-authored* until measured otherwise — the open question is whether to wire a stronger
   `JUDGE_MODEL` for this one judgment, or leave emission to humans. Recall of the qwen path ≈ 0; its
   precision is the point.
+
+  **Resolved (2026-06-15) — the frontier agent is the MAXIMUM judge.** Rather than chase a stronger
+  local model, the tool now *flags* candidate justifications for on-demand adjudication by the
+  consuming agent (a Claude Code session), which authors a **durable** edge. Tiered escalation:
+  (1) cheap qwen judge emits `supports`/`refines`; (2) optional local `DEPENDS_MODEL` escalation
+  (binary "rests entirely on?" verify → upgrade) — off by default, plumbed; (3) **`mem review`** —
+  a derived (unstored) list of admissible `supports`/`refines` from a derivation (`inferred`/`reduced`
+  subject) that *might* be a `depends_on`; **`mem link <s> depends_on <o>`** lets the frontier agent
+  author it (author `frontier@1` → durable, never re-linked away). `mem recall`/`mem consolidate`
+  print a `⚑ N edge(s) for review` nudge. Verified end-to-end: consolidate→flag→review→link→JTMS
+  retraction. This is the standing answer — no stronger local model required.
 - **N7 (calibration) — no consumer.** Pure analysis; recall ranking is scale-invariant and doesn't
   need a calibrated probability. Run it only if a downstream consumer of a calibrated number appears.
 - **N8 (Linker A/B) — the real next experiment**, but it's an L-effort experiment (needs N8a corpus

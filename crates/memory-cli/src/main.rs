@@ -83,6 +83,8 @@ fn main() {
         Some("consolidate") => cmd_consolidate(&args[1..]),
         Some("reduce") => cmd_reduce(&args[1..]),
         Some("dream") => cmd_dream(&args[1..]),
+        Some("review") => cmd_review(&args[1..]),
+        Some("link") => cmd_link(&args[1..]),
         Some("onboard") => cmd_onboard(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
@@ -96,6 +98,8 @@ fn main() {
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem reduce [--dry-run]        # collapse duplicate beliefs: recall folds them behind one rep");
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
+            eprintln!("  mem review [--limit N]        # list edges flagged for frontier review (candidate depends_on)");
+            eprintln!("  mem link <subj> <kind> <obj> [--rationale R]  # author a durable edge (frontier/human adjudication)");
             eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--commit]  # lead harvest → claim drafts → store");
             eprintln!("  mem scope");
             std::process::exit(2);
@@ -321,6 +325,13 @@ fn cmd_recall(args: &[String]) {
                 }
             }
         }
+    }
+
+    // FRONTIER-REVIEW NUDGE (surfacing-stage): if the cheap judge left candidate justifications the
+    // tool can't safely adjudicate, tell the consuming agent — it's the MAXIMUM judge (see `mem review`).
+    let n_review = depends_on_candidates(&sg, &defeated).len();
+    if n_review > 0 {
+        println!("\n⚑ {n_review} edge(s) may be justifications (depends_on) — run `mem review` to adjudicate.");
     }
 }
 
@@ -938,6 +949,15 @@ fn cmd_consolidate(args: &[String]) {
         total += Consolidator::commit(&dir, &props, belief_scope(t));
     }
     println!("consolidated {} belief(s); drew {} new edge(s)", targets.len(), total);
+    // Frontier-review nudge: the judge emits supports/refines but can't safely tell a justification
+    // (depends_on) from corroboration — reload and surface any candidates for on-demand adjudication.
+    if let Ok(g2) = Graph::load_dir(&dir) {
+        let sg2 = scoped_graph(&g2, &scopes);
+        let n_review = depends_on_candidates(&sg2, &sg2.defeated()).len();
+        if n_review > 0 {
+            println!("⚑ {n_review} edge(s) flagged for frontier review — run `mem review` to adjudicate (candidate depends_on).");
+        }
+    }
 }
 
 /// `mem reduce [--dry-run]` — the deterministic duplicate-collapse pass. A SURFACING-stage HIDE,
@@ -1090,6 +1110,181 @@ fn cmd_dream(args: &[String]) {
         }
     } else {
         println!("no new bridges this pass ({} probe(s) recorded as earned-unrelated).", records.len());
+    }
+}
+
+/// A candidate justification the cheap judge couldn't safely adjudicate: an in-force
+/// `supports`/`refines` edge from a DERIVATION (subject directness inferred/reduced) to an older
+/// belief — it MIGHT be a true JTMS `depends_on`, but only a frontier agent should make that call
+/// (V5: a false depends_on wrongly retracts; qwen-7b won't author it). Surfaced by `mem review`.
+struct ReviewCandidate {
+    subject: String,
+    object: String,
+    kind: String,
+}
+
+/// Derived (not stored): the depends_on candidates on the current frontier. A pair already carrying
+/// an in-force `depends_on` is skipped (already adjudicated). "the layout is never the storage."
+fn depends_on_candidates(g: &Graph, defeated: &std::collections::HashSet<String>) -> Vec<ReviewCandidate> {
+    use std::collections::HashSet;
+    // pairs already adjudicated as depends_on → skip
+    let mut adjudicated: HashSet<(String, String)> = HashSet::new();
+    for (b, r) in g.relations() {
+        if !defeated.contains(&b.id) && matches!(r.kind, EdgeKind::DependsOn) {
+            adjudicated.insert((r.subject.clone(), r.object.clone()));
+        }
+    }
+    let mut out = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for (b, r) in g.relations() {
+        if defeated.contains(&b.id) {
+            continue; // edge must be in force
+        }
+        if !matches!(r.kind, EdgeKind::Supports | EdgeKind::Refines) {
+            continue;
+        }
+        // subject = the dependent; it must be a current DERIVATION (inferred/reduced), not a
+        // directly-observed `stated` fact (those are independently grounded — V5).
+        let Some(subj) = g.by_id(&r.subject) else { continue };
+        if defeated.contains(&subj.id) || !matches!(subj.directness.as_str(), "inferred" | "reduced") {
+            continue;
+        }
+        if g.by_id(&r.object).map_or(true, |o| defeated.contains(&o.id)) {
+            continue; // object (the ground) must be current
+        }
+        let key = (r.subject.clone(), r.object.clone());
+        if adjudicated.contains(&key) || !seen.insert(key) {
+            continue;
+        }
+        out.push(ReviewCandidate { subject: r.subject.clone(), object: r.object.clone(), kind: r.kind.as_str().to_string() });
+    }
+    out
+}
+
+/// `mem review [--limit N]` — surface edges flagged for FRONTIER adjudication. The cheap local judge
+/// (qwen) emits `supports`/`refines`; it cannot reliably tell a JTMS justification (`depends_on`) from
+/// corroboration (measured). So this lists the candidate justifications and hands them to the
+/// consumer of the tool — a Claude Code session is the MAXIMUM judge, adjudicating on demand and
+/// authoring a durable edge with `mem link`. Pure derived view; nothing is written.
+fn cmd_review(args: &[String]) {
+    let mut limit = 20usize;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--limit" {
+            limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(20);
+            i += 1;
+        }
+        i += 1;
+    }
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let defeated = sg.defeated();
+    let mut cands = depends_on_candidates(&sg, &defeated);
+    if cands.is_empty() {
+        println!("Nothing flagged for review in scope ({}).", scopes.join(", "));
+        return;
+    }
+    let total = cands.len();
+    cands.truncate(limit);
+    println!(
+        "{total} edge(s) flagged for frontier review — candidate justifications (is this a true depends_on?):\n"
+    );
+    for c in &cands {
+        let (subj, obj) = (sg.by_id(&c.subject), sg.by_id(&c.object));
+        let (ss, sc, sd) = subj.map(|b| (b.slug.as_str(), b.claim.as_str(), b.directness.as_str())).unwrap_or(("?", "?", "?"));
+        let (os, oc) = obj.map(|b| (b.slug.as_str(), b.claim.as_str())).unwrap_or(("?", "?"));
+        println!("• [{ss}] --{}--> [{os}]", c.kind);
+        println!("    derivation (d={sd}): {}", truncate(sc, 100));
+        println!("    ground:           {}", truncate(oc, 100));
+        println!("    if [{ss}] holds ONLY because [{os}] is true (it collapses if [{os}] is withdrawn), author it:");
+        println!("      mem link {ss} depends_on {os} --rationale \"<why it depends>\"");
+        println!();
+    }
+    if total > cands.len() {
+        println!("… {} more (raise --limit).", total - cands.len());
+    }
+    println!(
+        "Adjudicate as a frontier agent: confirm a true JTMS dependency with `mem link … depends_on …`; \
+         leave plain corroboration as-is. Authored edges are DURABLE (a re-link never overwrites them)."
+    );
+}
+
+/// `mem link <subject-ref> <kind> <object-ref> [--rationale R]` — author a DURABLE edge by hand
+/// (a frontier agent or human adjudicating). Routed through the Consolidator (the sole edge writer),
+/// authored as `frontier@1` so it is NOT a regenerable machine edge — an unattended re-link links
+/// AROUND it and never overwrites it (human/frontier edges are anchors, §edge-assignment). The
+/// primary use is closing a `mem review` candidate into a real `depends_on`.
+fn cmd_link(args: &[String]) {
+    let mut rationale = String::new();
+    let mut positionals: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--rationale" => { rationale = args.get(i + 1).cloned().unwrap_or_default(); i += 1; }
+            s if !s.starts_with("--") => positionals.push(s.to_string()),
+            _ => {}
+        }
+        i += 1;
+    }
+    if positionals.len() < 3 {
+        eprintln!("usage: mem link <subject> <kind> <object> [--rationale R]   (kind e.g. depends_on)");
+        std::process::exit(2);
+    }
+    let (subject_ref, kind_str, object_ref) =
+        (positionals[0].clone(), positionals[1].clone(), positionals[2].clone());
+
+    let kind = EdgeKind::parse(&kind_str);
+    // self-provenance never reifies; a hand-authored derived_from makes no sense here.
+    if matches!(kind, EdgeKind::DerivedFrom) {
+        eprintln!("derived_from is inline self-provenance — not authorable as an edge");
+        std::process::exit(2);
+    }
+
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let (Some(subject), Some(object)) = (sg.resolve_ref(&subject_ref), sg.resolve_ref(&object_ref)) else {
+        eprintln!(
+            "could not resolve {}{} in scope ({})",
+            if sg.resolve_ref(&subject_ref).is_none() { format!("subject '{subject_ref}'") } else { String::new() },
+            if sg.resolve_ref(&object_ref).is_none() { format!(" object '{object_ref}'") } else { String::new() },
+            scopes.join(", ")
+        );
+        std::process::exit(2);
+    };
+    if subject == object {
+        eprintln!("subject and object are the same belief — nothing to link");
+        std::process::exit(2);
+    }
+
+    let scope = sg.by_id(&subject).map(|b| belief_scope(b).to_string()).unwrap_or_else(|| "global".into());
+    let proposal = LinkProposal {
+        kind: kind.clone(),
+        subject,
+        object,
+        confidence: Confidence::Strong,
+        rationale: if rationale.trim().is_empty() {
+            "frontier adjudication".into()
+        } else {
+            format!("frontier adjudication: {}", rationale.trim())
+        },
+        linker: "frontier@1".into(), // durable: not a regenerable machine edge
+    };
+    match Consolidator::commit(&dir, std::slice::from_ref(&proposal), &scope) {
+        0 => println!("[{subject_ref}] --{}--> [{object_ref}] already linked.", kind.as_str()),
+        _ => println!(
+            "linked [{subject_ref}] --{}--> [{object_ref}] in scope={scope} (durable; authored by frontier@1).",
+            kind.as_str()
+        ),
     }
 }
 
