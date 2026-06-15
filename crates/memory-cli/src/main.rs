@@ -406,7 +406,8 @@ fn cmd_ask(args: &[String]) {
         Err(_) => { println!("No memories yet."); return; }
     };
     let sg = scoped_graph(&g, &scopes);
-    let current = sg.current_content(&sg.defeated());
+    let defeated = sg.defeated();
+    let current = sg.current_content(&defeated);
     if current.is_empty() {
         println!("No memory in scope ({}).", scopes.join(", "));
         return;
@@ -425,9 +426,26 @@ fn cmd_ask(args: &[String]) {
         return;
     }
 
+    // DETERMINISTIC CONFLICT PASS (V4/N3): the reducer is frontier-pre-filtered (we feed only
+    // `current` beliefs), but V4 showed the LLM silently adopts a contradiction ~5/6 of the time
+    // rather than surfacing it. So we detect live `attacks` BETWEEN the recalled beliefs ourselves —
+    // genuine open conflicts (both endpoints current) — tell the model about them, and surface them
+    // unconditionally afterward regardless of what the LLM volunteers. This is the conflict half of
+    // the trusted-reducer gate; the frontier pre-filter is the other half.
+    let detected_conflicts = live_conflicts_among_hits(&sg, &defeated, &hits);
+
     let mut ctx = format!("Question: {question}\n\nBeliefs:\n");
     for (_id, slug, claim, _s) in &hits {
         ctx.push_str(&format!("- [{slug}] {claim}\n"));
+    }
+    if !detected_conflicts.is_empty() {
+        ctx.push_str(
+            "\nKNOWN CONFLICTS — these recalled beliefs directly attack each other and are BOTH \
+             current. Do NOT silently pick a side; report the disagreement in `conflicts`:\n",
+        );
+        for (a, b) in &detected_conflicts {
+            ctx.push_str(&format!("- [{a}] vs [{b}]\n"));
+        }
     }
 
     let model = std::env::var("ASK_MODEL")
@@ -462,6 +480,46 @@ fn cmd_ask(args: &[String]) {
             }
         }
     }
+
+    // Surface the edge-grounded conflicts unconditionally (after synthesis, even if Ollama was
+    // down): these are ground truth from the graph, not the LLM's discretion. The model's free-text
+    // `conflicts` above can ADD semantic conflicts the edges don't encode; these are the floor.
+    for (a, b) in &detected_conflicts {
+        println!("⚠ conflict (live attack): [{a}] vs [{b}] — both current, surfaced not resolved");
+    }
+}
+
+/// Detect genuine open conflicts among the recalled hits: unordered pairs `(slugA, slugB)` joined by
+/// a CURRENT `attacks` edge where BOTH endpoints are in the hit set. Deterministic, dedup'd. This is
+/// the conflict half of the trusted-reducer gate (V4/N3) — the reducer can't be relied on to
+/// volunteer a contradiction, so the graph surfaces it.
+fn live_conflicts_among_hits(g: &Graph, defeated: &std::collections::HashSet<String>, hits: &[Hit]) -> Vec<(String, String)> {
+    let hit_ids: std::collections::HashSet<&str> = hits.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let adj = g.adjacency(defeated);
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (id, _slug, _claim, _score) in hits {
+        for r in adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if r.kind != EdgeKind::Attacks {
+                continue;
+            }
+            let other = if &r.subject == id { &r.object } else { &r.subject };
+            if other == id || !hit_ids.contains(other.as_str()) {
+                continue;
+            }
+            let (lo, hi) = if id.as_str() < other.as_str() {
+                (id.clone(), other.clone())
+            } else {
+                (other.clone(), id.clone())
+            };
+            if seen.insert((lo.clone(), hi.clone())) {
+                let sa = g.by_id(&lo).map(|x| x.slug.clone()).unwrap_or(lo);
+                let sb = g.by_id(&hi).map(|x| x.slug.clone()).unwrap_or(hi);
+                out.push((sa, sb));
+            }
+        }
+    }
+    out
 }
 
 /// Machine-inferred edge authors whose edges are a REGENERABLE layer (redrawn by an unattended
