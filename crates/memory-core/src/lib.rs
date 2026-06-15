@@ -149,6 +149,18 @@ pub struct Relation {
     pub object: Id,
 }
 
+/// The deficiency / known-debt axis (design §3b) — ORTHOGONAL to confidence. A belief can be
+/// maximally entrenched (definitely true) AND maximally deficient (a known compromise that should
+/// change). None for ordinary beliefs. `forcing_constraint` is *why* the debt is accepted;
+/// `revisit_when` is the trigger to rework it (when the constraint lifts, the debt should resurface —
+/// modelled as a `blocked_on` edge to the constraint belief when one exists).
+#[derive(Debug, Clone)]
+pub struct Deficiency {
+    pub severity: String,           // "low" | "medium" | "high"
+    pub forcing_constraint: String, // why we accept the debt
+    pub revisit_when: Option<String>, // the condition under which to rework it
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Belief {
     pub id: Id,
@@ -173,6 +185,9 @@ pub struct Belief {
     /// ISO-8601 transaction time (when recorded). Lexically ordered. Lets the judge only
     /// propose supersedes from the genuinely-newer belief.
     pub txn_time: String,
+    /// Known-debt envelope (§3b), present iff this belief records a compromise. Orthogonal to
+    /// confidence: a deficient belief is still true and current — it just should change.
+    pub deficiency: Option<Deficiency>,
 }
 
 impl Belief {
@@ -203,6 +218,8 @@ impl Belief {
         let mut pending_edge_kind: Option<EdgeKind> = None;
         let (mut rel_kind, mut rel_subj, mut rel_obj) =
             (None::<EdgeKind>, String::new(), String::new());
+        let (mut def_sev, mut def_fc, mut def_rw) =
+            (String::new(), String::new(), None::<String>);
 
         for line in fm {
             let indent = line.len() - line.trim_start().len();
@@ -288,6 +305,17 @@ impl Belief {
                             b.txn_time = v.trim().to_string();
                         }
                     }
+                    // known-debt envelope (§3b): free-text values, single line each.
+                    "deficiency" => {
+                        if let Some(v) = trimmed.strip_prefix("severity:") {
+                            def_sev = v.trim().to_string();
+                        } else if let Some(v) = trimmed.strip_prefix("forcing_constraint:") {
+                            def_fc = v.trim().to_string();
+                        } else if let Some(v) = trimmed.strip_prefix("revisit_when:") {
+                            let v = v.trim();
+                            def_rw = if v.is_empty() || v == "null" { None } else { Some(v.to_string()) };
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -298,6 +326,14 @@ impl Belief {
         }
         if let (Some(kind), false, false) = (rel_kind, rel_subj.is_empty(), rel_obj.is_empty()) {
             b.relation = Some(Relation { kind, subject: rel_subj, object: rel_obj });
+        }
+        // a deficiency needs at least its forcing_constraint to be meaningful
+        if !def_fc.is_empty() {
+            b.deficiency = Some(Deficiency {
+                severity: if def_sev.is_empty() { "medium".into() } else { def_sev },
+                forcing_constraint: def_fc,
+                revisit_when: def_rw,
+            });
         }
         Some(b)
     }
@@ -663,6 +699,25 @@ mod tests {
         assert!(k.is_collapsing());
         // and it is NOT a defeat — a duplicate isn't false, just redundant
         assert!(!k.is_defeating());
+    }
+
+    #[test]
+    fn parses_the_deficiency_envelope() {
+        let md = "---\n\
+id: b_def\n\
+slug: wasm-save-ts-hardcoded\n\
+claim:\n  kind: text\n  text: >-\n    The WASM save timestamp is hardcoded to 0.\n\
+confidence:\n  directness: stated\n  source_weight: 0.9\n\
+deficiency:\n  severity: high\n  forcing_constraint: no wall-clock available in the WASM sandbox\n  revisit_when: when WASI clock support lands\n\
+edges: []\n---\n\nbody\n";
+        let b = Belief::parse(md).expect("parses");
+        let d = b.deficiency.expect("has a deficiency envelope");
+        assert_eq!(d.severity, "high");
+        assert_eq!(d.forcing_constraint, "no wall-clock available in the WASM sandbox");
+        assert_eq!(d.revisit_when.as_deref(), Some("when WASI clock support lands"));
+        // an ordinary belief has none
+        let plain = Belief::parse("---\nid: b_x\nslug: x\nclaim:\n  kind: text\n  text: >-\n    plain\n---\n").unwrap();
+        assert!(plain.deficiency.is_none());
     }
 
     #[test]
