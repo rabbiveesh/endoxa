@@ -77,7 +77,45 @@ Deep/meta-learned EBMs show capacity can be decoupled from pattern dimensionalit
 quadratic energy with an arbitrary network whose weights store patterns. Useful framing, not an
 immediate build.
 
-## What to actually do — two cheap, decisive experiments
+## Experimental verdicts — ran both ideas on our own data (2026-06-15, offline, no LLM)
+
+**Both energy ideas under-deliver on endoxa's actual data.** The research said "compose / borrow"; the
+experiments downgrade both to **skip / narrow-optional**. A valuable negative result — it saves building
+elegant machinery that doesn't pay here.
+
+### Hopfield retrieval (F1/F2) → **SKIP for the L2 lens** (high confidence)
+The decisive fact is mechanical, not empirical: **a single Hopfield update `p = proj(β·Xq)` is a
+*monotone transform* of the cosine score `Xq`, so the top-k ranking is identical to cosine-kNN by
+construction** — measured identical to 3 decimals across every β and sparsity. Multi-step *sparse*
+iteration ties cosine (noisy recovery σ=0.15: 0.900 vs 0.901); multi-step *softmax* (the popular
+Ramsauer variant) actively **harms** (0.312 — it collapses to spurious metastable blends). The genuine
+sparse-attractor property (`p_self → 1.000` at β=32) is real but governs only the *weight vector*, not
+which beliefs get surfaced. No regime beat cosine on ranking. **Don't build it.** The one untested place
+it could still pay: a single *blended* vector `Xᵀp` (an exact few-pattern convex combination) to seed an
+LLM reducer — but our reducer consumes a belief *set* (slugs), not a fused vector, so that's speculative.
+
+### Graded/weighted-bipolar frontier (F4) → **keep binary `defeated()`; graded is at most an optional intra-live tiebreaker** (medium)
+Good news first: graded acceptability is **safe** to layer on — over 225 beliefs the binary `defeated()`
+labeling is locally energy-optimal at **79%** of nodes, and *all 47* disagreements are the energy pulling
+a weakly-supported-but-undefeated node *down* (toward out); it **never reinstates a defeated belief
+(0/47)** and respects every defeat pair (33/33). But it earns almost nothing: graded ranks winner>loser
+33/33, yet **raw base score alone already gets 30/33** — propagation fixes 3 pairs. On *open conflicts*
+(the case binary in/out can't rank) there are only **6 live attack edges across 225 beliefs**; base score
+decides 5/6, graded 6/6 — **a net +1 pair of signal across the entire corpus set.** And the convergence
+risk the research flagged is **untested, not solved**: there are **0 mutual-attack cycles** in any corpus,
+so the ODE converges trivially (<40 steps) only because the failure mode is absent. **Verdict:** the graph
+is too shallow (median ~1 open conflict/corpus, no cycles) for message-passing to earn its keep; keep the
+discrete fixpoint, and if anything expose graded acceptability as an *optional confidence gradient on the
+live set*, never as a defeat signal. Revisit only if a real store grows dense bidirectional conflict.
+
+### The meta-lesson
+endoxa's hand-rolled **cosine-kNN + StructuralConfidence + binary `defeated()`** already capture the
+signal these energy formalisms would provide, *on the data we have*. The formalisms are real math and
+might pay on **different** data (dense conflict graphs with cycles; true OOD text queries; a fused-vector
+reducer seed) — but on our corpora they are elegant re-descriptions, not upgrades. "Borrow the structure,
+not the guarantees" tightened by experiment to: **don't even borrow the structure until the data needs it.**
+
+## (Original) two cheap experiments — now RUN; verdicts above
 
 1. **Sparse-Hopfield retrieval head vs cosine-kNN (F2).** Build an entmax/normmax retrieval layer over
    the existing per-corpus `.embeddings.json`; A/B it against the current L2 cosine lens on recall@k
