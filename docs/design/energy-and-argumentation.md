@@ -180,7 +180,26 @@ coboundary `(δx)_e` is the computable per-edge inconsistency. Neural Sheaf Diff
 NeurIPS 2022) shows the sheaf geometry is precisely the principled fix for *heterophilic* graphs
 (connected nodes that oppose) = our attacks-edges → **borrow the structure**, not the learned-GNN guarantees.
 
-### Verdict + the cheap experiment (which, per the meta-lesson above, must come BEFORE any build)
+### Status: PARKED for future exploration (2026-06-16) — revisit when the data earns it
+**Decision: do not build, do not even run the probe yet.** Not because the stalk *vectors* are missing
+(we have embeddings + StructuralConfidence), but because the two things that would make it pay are
+*measured-absent today*: (1) the **restriction maps are ill-posed** — topical embeddings put the two
+sides of a conflict *close together* (`cosine(defeated) > cosine(current)`), so identity maps score
+attackers as consistent (backwards); a well-posed map needs a *logic/entailment-aware* stalk we don't
+have, or learned maps we can't train at this scale; (2) the **conflict graph is too sparse** — the graded
+experiment measured ~6 open-conflict edges and **0 mutual-attack cycles across 225 beliefs**, and
+message-passing added ~+1 pair of signal, so there is nothing dense/cyclic for sheaf/opinion-dynamics to
+chew on. **Why parking is free:** a sheaf consistency layer is a *derived, disposable layer over L0* (the
+load-bearing rule) — adopting it later costs nothing now, so deferral is the correct default.
+
+**Revisit trigger** (deficiency-style): build it when EITHER (a) the live store accumulates *dense/cyclic*
+conflict — open-conflict count into the dozens, or mutual-attack cycles actually appear (the graded-energy
+script is the cheap detector) — OR (b) we have a *logic-aware stalk* (entailment/NLI vectors per belief),
+at which point the inconsistency metric becomes well-posed. The one falsifying probe to run first when
+revisiting: Dirichlet energy with the chosen stalks — does it spike on the *known* conflicts? If a topical
+stalk doesn't, that proves the stalk must be entailment-based before anything else is worth building.
+
+### (If/when un-parked) the cheap experiment, per the meta-lesson, comes BEFORE any build
 **Compose — but the energy experiments just taught us paper-good ideas die on contact with our data, so
 this one earns the same gate.** The open *design* choice is the **stalk**: the inconsistency metric wants
 belief *embeddings* (768-d) as stalks with identity/sign restriction maps; the multi-cluster reducer
