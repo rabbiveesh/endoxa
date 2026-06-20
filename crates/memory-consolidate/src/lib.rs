@@ -339,6 +339,11 @@ impl Linker for ProximityLinker {
 pub struct JudgmentLinker {
     pub url: String,
     pub model: String,
+    /// Optional STRONGER model for the high-stakes `depends_on` judgment (env `DEPENDS_MODEL`).
+    /// qwen2.5:7b won't author `depends_on` at the n-way stage (measured: it says refines/supports),
+    /// so when this is set we ESCALATE admissible supports/refines through a focused binary verify on
+    /// this model and upgrade to `depends_on` on confirmation. Unset → no escalation, zero extra cost.
+    pub depends_model: Option<String>,
     pub k: usize,
     pub min_sim: f32,
 }
@@ -348,9 +353,25 @@ impl JudgmentLinker {
         JudgmentLinker {
             url: std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".into()),
             model: std::env::var("JUDGE_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into()),
+            depends_model: std::env::var("DEPENDS_MODEL").ok().filter(|s| !s.trim().is_empty()),
             k: 3,
             min_sim: 0.55,
         }
+    }
+
+    /// The model that adjudicates `depends_on` (the stronger one if configured, else the base judge).
+    fn depends_judge(&self) -> &str {
+        self.depends_model.as_deref().unwrap_or(&self.model)
+    }
+
+    /// Focused binary: does A rest ENTIRELY on B (JTMS dependency)? Used both to verify an n-way
+    /// `depends_on` and to escalate a supports/refines into one. Runs on `depends_judge()`.
+    fn rests_entirely_on(&self, a: &str, b: &str) -> bool {
+        let vu = format!("A: {a}\nB: {b}");
+        memory_embed::chat_json(&self.url, self.depends_judge(), DEPENDS_VERIFY_SYSTEM, &vu)
+            .ok()
+            .and_then(|x| x.get("depends").and_then(|o| o.as_bool()))
+            .unwrap_or(false)
     }
 }
 
@@ -359,18 +380,31 @@ developer's memory, where A is the NEWER belief. Choose exactly one relation: \
 \"supersedes\" = A and B are about the SAME specific point and A is its updated version, so B is \
 now out of date (e.g. A says \"we now use X\" and B says \"we use Y\" for the same thing) — a NEW \
 or additional fact on a related topic is NOT supersedes; \"refines\" = A adds detail to or narrows B, both \
-still true; \"supports\" = A is independent evidence for B; \"attacks\" = A claims B is factually \
+still true; \"supports\" = A is INDEPENDENT evidence for B: A stands on its own and would still be assertable if \
+B were DELETED, and it happens to corroborate B; \"depends_on\" = A is a CONCLUSION DERIVED from B — \
+apply the deletion test: if B were DELETED, A would no longer make sense or be justified, because A's \
+ONLY grounding is B (often signalled by A saying \"because/therefore/so/this means\" about B's \
+content). The deletion test is decisive: A still stands without B → supports; A collapses without B → \
+depends_on; \"attacks\" = A claims B is factually \
 WRONG (a genuine contradiction, not merely a newer state); \"none\" = unrelated, or merely \
 similar with no logical relation. A change of decision over time is supersedes, NOT attacks. \
 Default to none unless the relation is clear. Reply ONLY with JSON shaped like \
 {\"relation\":\"none\",\"confidence\":\"plausible\",\"rationale\":\"<one short sentence>\"} \
 where confidence is weak, plausible, or strong.";
 
-/// Adversarial second pass for proposed supersedes (high stakes — it drops a belief).
+/// Adversarial second pass for proposed supersedes (high stakes — it drops a belief). Also
+/// extracts the CARRY-OVER: the load-bearing detail B states that A omits, which would otherwise
+/// be lost once B is hidden behind the supersede. The carry-over rides the edge body so `mem
+/// expand` shows it next to the winner — the displaced point survives without un-defeating B.
 const VERIFY_SYSTEM: &str = "You verify whether belief B is made OBSOLETE by belief A. Answer \
 outdated=true ONLY if A states an updated value for the SAME thing B is about, making B wrong \
-to show now. If they are about different aspects, or both are still true, answer false. Reply \
-JSON {\"outdated\": true|false}";
+to show now. If they are about different aspects, or both are still true, answer false. When \
+outdated=true, also extract carry_over: the specific load-bearing detail B states that A does NOT \
+contain — the concrete mechanism, value, reason, or step (e.g. WHAT was done or WHY it worked), \
+quoted from B's own words. Do NOT return a title, label, or status phrase like \"step 1\" or \
+\"confirmed working\"; return the substance it refers to. Use an empty string only if A already \
+carries every concrete detail B has. Reply JSON {\"outdated\": true|false, \"carry_over\": \"<the \
+concrete detail, or empty>\"}";
 
 /// Adversarial pass for proposed attacks. A false conflict flag is noise, so the judge must
 /// clear a pointed second call before we record a contradiction; otherwise we downgrade to a
@@ -379,6 +413,35 @@ const ATTACK_VERIFY_SYSTEM: &str = "You verify whether belief A genuinely claims
 FACTUALLY WRONG — a real contradiction where both cannot be true at once. A being merely newer, \
 about a different aspect, a stronger or critical opinion, or a design choice is NOT a \
 contradiction. Reply JSON {\"contradicts\": true|false}";
+
+/// Adversarial pass for proposed depends_on. A `depends_on` is JTMS: it can RETRACT A when B dies,
+/// so a false one is dangerous (V5: 95% of sole-`supports` dependents are independently grounded).
+/// The verifier must agree A would be UNJUSTIFIED without B; otherwise we downgrade to `supports`.
+const DEPENDS_VERIFY_SYSTEM: &str = "You verify whether belief A rests ENTIRELY on belief B: would A \
+become unjustified — no longer something you could assert — if B were proven false or withdrawn? \
+Answer depends=true ONLY if A is a conclusion DERIVED from B with no independent grounding of its \
+own. If A has any independent basis (it's a directly observed fact, or stands without B), answer \
+false. Reply JSON {\"depends\": true|false}";
+
+/// Frontier-review aid (safe, never commits): does `model` think belief A rests ENTIRELY on belief B
+/// — a JTMS dependency? `mem review` uses this to ANNOTATE candidates so the frontier agent can
+/// prioritize. Returns None if the model is unavailable. A high-recall model (e.g. gemma2:9b) is a
+/// good candidate flagger here precisely because its false positives become review items a human
+/// rejects, not committed edges.
+pub fn model_thinks_depends(url: &str, model: &str, a: &str, b: &str) -> Option<bool> {
+    let vu = format!("A: {a}\nB: {b}");
+    memory_embed::chat_json(url, model, DEPENDS_VERIFY_SYSTEM, &vu)
+        .ok()
+        .and_then(|x| x.get("depends").and_then(|o| o.as_bool()))
+}
+
+/// V5 discipline: admit a `depends_on` ONLY when the dependent A is itself a derivation —
+/// `directness` inferred or reduced. A `stated` belief is a direct observation (independently
+/// grounded), so a judge's depends_on on it is downgraded to `supports`. Empty/unknown directness is
+/// treated conservatively as not-admissible (corroboration, not justification).
+fn depends_on_admissible(new_directness: &str) -> bool {
+    matches!(new_directness, "inferred" | "reduced")
+}
 
 impl Linker for JudgmentLinker {
     fn id(&self) -> &str {
@@ -414,10 +477,12 @@ impl Linker for JudgmentLinker {
                 Ok(v) => v,
                 Err(_) => continue, // judge unavailable for this pair → skip
             };
-            let mut kind = match v.get("relation").and_then(|x| x.as_str()).unwrap_or("none") {
+            let judged = v.get("relation").and_then(|x| x.as_str()).unwrap_or("none").to_string();
+            let mut kind = match judged.as_str() {
                 "supersedes" => EdgeKind::Supersedes,
                 "refines" => EdgeKind::Refines,
                 "supports" => EdgeKind::Supports,
+                "depends_on" => EdgeKind::DependsOn,
                 "attacks" => EdgeKind::Attacks,
                 _ => continue, // "none" or unknown → no edge
             };
@@ -435,20 +500,29 @@ impl Linker for JudgmentLinker {
             }
             // Adversarial verify: a second pointed call must agree B is now obsolete. Catches
             // the over-eager "same topic, different aspect" supersessions the single judgment misses.
+            let mut carry_over = String::new();
             if matches!(kind, EdgeKind::Supersedes) {
                 let vu = format!("A: {}\nB: {}", ctx.new.claim, b.claim);
-                let outdated = memory_embed::chat_json(&self.url, &self.model, VERIFY_SYSTEM, &vu)
-                    .ok()
+                let verdict = memory_embed::chat_json(&self.url, &self.model, VERIFY_SYSTEM, &vu).ok();
+                let outdated = verdict
+                    .as_ref()
                     .and_then(|x| x.get("outdated").and_then(|o| o.as_bool()))
                     .unwrap_or(false);
                 if !outdated {
                     continue; // verification rejected the supersession
                 }
+                // Capture the displaced detail so the winner's edge carries it (see VERIFY_SYSTEM).
+                carry_over = verdict
+                    .as_ref()
+                    .and_then(|x| x.get("carry_over").and_then(|o| o.as_str()))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
             }
             // Adversarial verify for attacks: a false "conflict" is noise. A second pointed call
             // must agree A genuinely claims B is WRONG; otherwise DOWNGRADE to a non-defeating
             // relates-to — keep the relation, drop the bogus conflict flag.
-            let mut downgraded = false;
+            let mut downgrade_to: Option<&str> = None;
             if matches!(kind, EdgeKind::Attacks) {
                 let vu = format!("A: {}\nB: {}", ctx.new.claim, b.claim);
                 let contradicts = memory_embed::chat_json(&self.url, &self.model, ATTACK_VERIFY_SYSTEM, &vu)
@@ -457,15 +531,41 @@ impl Linker for JudgmentLinker {
                     .unwrap_or(false);
                 if !contradicts {
                     kind = EdgeKind::Other("relates-to".into());
-                    downgraded = true;
+                    downgrade_to = Some("no real contradiction");
+                }
+            }
+            // depends_on (JTMS, V5/N4): high-stakes — it can RETRACT A when its justification B dies,
+            // so it must clear TWO guards or it falls back to plain `supports` (same direction, drops
+            // the justification contract): (1) directness — A must itself be a derivation
+            // (inferred/reduced), never an independently-grounded `stated` fact; (2) an adversarial
+            // verify that A truly rests entirely on B. confidence must not be weak.
+            // depends_on (JTMS, V5/N4): high-stakes — it can RETRACT A when its justification B dies, so
+            // the local judge NEVER auto-commits it. If the n-way judge proposes depends_on directly, it
+            // is admitted only when A is a derivation (directness gate), confidence isn't weak, AND a
+            // focused binary verify confirms A rests entirely on B; otherwise it downgrades to plain
+            // supports. We do NOT escalate supports/refines INTO depends_on from a local model: the A/B
+            // (2026-06-15) measured qwen at 0/4 recall and gemma2:9b at 1/4 specificity (it calls
+            // CI→GitHub a dependency) — no 8GB-class model is both high-recall and safe, and a false
+            // depends_on wrongly retracts an independently-grounded belief. depends_on is authored by the
+            // FRONTIER agent via `mem review` + `mem link`; a local DEPENDS_MODEL only ANNOTATES review.
+            if matches!(kind, EdgeKind::DependsOn) {
+                let admit = depends_on_admissible(&ctx.new.directness)
+                    && conf != Confidence::Weak
+                    && self.rests_entirely_on(&ctx.new.claim, &b.claim);
+                if !admit {
+                    kind = EdgeKind::Supports;
+                    downgrade_to = Some("A is independently grounded — corroboration, not justification");
                 }
             }
             let rationale = v.get("rationale").and_then(|x| x.as_str()).unwrap_or("");
-            let rationale = if downgraded {
-                format!("judge: downgraded attacks→relates-to (no real contradiction): {rationale}")
-            } else {
-                format!("judge: {rationale}")
+            let mut rationale = match downgrade_to {
+                Some(why) => format!("judge: downgraded {judged}→{} ({why}): {rationale}", kind.as_str()),
+                None => format!("judge: {rationale}"),
             };
+            // Fold the displaced detail onto the supersede edge so the winner carries it forward.
+            if !carry_over.is_empty() {
+                rationale.push_str(&format!("\ncarries: {carry_over}"));
+            }
             out.push(LinkProposal {
                 kind,
                 subject: ctx.new.id.clone(),
@@ -596,6 +696,55 @@ mod tests {
 
     fn content(id: &str, slug: &str) -> Belief {
         Belief { id: id.into(), slug: slug.into(), claim: format!("claim {slug}"), ..Belief::default() }
+    }
+
+    #[test]
+    fn depends_on_proposal_round_trips_to_a_reified_edge_and_drives_jtms() {
+        // The end-to-end wiring (independent of the LLM's recall): a `depends_on` LinkProposal →
+        // Consolidator writes a reified edge-belief → it parses back → `defeated()` JTMS-retracts the
+        // dependent when its justification is retracted. Proves the emission path the judge feeds into.
+        use memory_core::Edge;
+        let dir = std::env::temp_dir().join(format!("mc-dep-{}", content_id("dep-rt")));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let p = LinkProposal {
+            kind: EdgeKind::DependsOn,
+            subject: "b_concl".into(), // the derived belief
+            object: "b_ground".into(), // its justification
+            confidence: Confidence::Strong,
+            rationale: "judge: A is derived from B".into(),
+            linker: "judge@1".into(),
+        };
+        assert_eq!(Consolidator::commit(&dir, &[p], "global"), 1, "depends_on edge written");
+
+        // content beliefs + a retractor of the ground + the committed reified depends_on edge-belief
+        let mut beliefs = vec![content("b_ground", "ground"), content("b_concl", "concl")];
+        let mut retractor = content("b_ret", "ret");
+        retractor.edges.push(Edge { kind: EdgeKind::Retracts, target: "b_ground".into() });
+        beliefs.push(retractor);
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                beliefs.push(Belief::parse(&std::fs::read_to_string(path).unwrap()).unwrap());
+            }
+        }
+        let g = Graph::from_beliefs(beliefs);
+        let d = g.defeated();
+        assert!(d.contains("b_ground"), "ground is retracted");
+        assert!(d.contains("b_concl"), "conclusion JTMS-retracted via the reified depends_on edge");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn depends_on_admissible_only_for_derivations() {
+        // V5: a `stated` (directly observed) belief is independently grounded → not a justification
+        // dependent; only inferred/reduced derivations may carry depends_on. Empty/unknown → no.
+        assert!(depends_on_admissible("inferred"));
+        assert!(depends_on_admissible("reduced"));
+        assert!(!depends_on_admissible("stated"));
+        assert!(!depends_on_admissible(""));
+        assert!(!depends_on_admissible("linked"));
     }
 
     #[test]

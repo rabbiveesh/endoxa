@@ -5,6 +5,9 @@
 //! and value types (impls live in `memory-consolidate`; the trait stays here so it pulls no
 //! LLM into core). First cut is hacky above L0; the belief *file format* is the durable part.
 
+pub mod confidence;
+pub use confidence::StructuralConfidence;
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -27,6 +30,13 @@ pub enum EdgeKind {
     DerivedFrom,
     Refines,
     Adjudicates,
+    /// JTMS assumption link: this belief is held *only because of* its target(s). It DOES NOT
+    /// defeat its target — it points the other way (dependent → justification). A belief with
+    /// `depends_on` edges goes OUT when ALL of its (in-force) justifications are defeated (proper
+    /// Doyle in/out). Distinct from `supports` on purpose: `supports` is corroboration (V5 found
+    /// 95% of sole-`supports` dependents are independently grounded, so withdrawing a supporter
+    /// must NOT retract); only a separately-authored `depends_on` carries the justification contract.
+    DependsOn,
     Other(String),
 }
 
@@ -43,6 +53,10 @@ pub enum Semantic {
     /// representative and folds the rest behind it. Does NOT touch the frontier — members
     /// stay current/durable/relivable; only the DISPLAY folds.
     Collapse,
+    /// Frontier-stage, JTMS in/out: a `depends_on` edge runs *backwards* of a defeat — the
+    /// SOURCE (dependent) belief is defeated when ALL of its in-force justification targets are
+    /// defeated. It never defeats its target. See `defeated()`.
+    Justify,
 }
 
 impl EdgeKind {
@@ -56,6 +70,7 @@ impl EdgeKind {
             "derived_from" => EdgeKind::DerivedFrom,
             "refines" => EdgeKind::Refines,
             "adjudicates" => EdgeKind::Adjudicates,
+            "depends_on" => EdgeKind::DependsOn,
             other => EdgeKind::Other(other.to_string()),
         }
     }
@@ -69,6 +84,7 @@ impl EdgeKind {
             EdgeKind::DerivedFrom => "derived_from",
             EdgeKind::Refines => "refines",
             EdgeKind::Adjudicates => "adjudicates",
+            EdgeKind::DependsOn => "depends_on",
             EdgeKind::Other(s) => s,
         }
     }
@@ -78,6 +94,10 @@ impl EdgeKind {
     pub fn semantic(&self) -> Semantic {
         match self {
             EdgeKind::Supersedes | EdgeKind::Adjudicates | EdgeKind::Retracts => Semantic::Defeat,
+            // `depends_on` is JTMS: it moves the frontier, but backwards (defeats its SOURCE when
+            // its targets all die), so it is its OWN stage — never `Defeat` (it must not defeat its
+            // target) and never `Annotate` (it does change the frontier). See `defeated()`.
+            EdgeKind::DependsOn => Semantic::Justify,
             // `same-as` is the Reducer's duplicate-fold edge: surfacing-stage, NOT a defeat — a
             // duplicate isn't false, just redundant, so it stays current and only the display folds.
             EdgeKind::Other(s) if s == "same-as" => Semantic::Collapse,
@@ -96,6 +116,12 @@ impl EdgeKind {
     /// untouched (a collapsing edge never defeats — see `defeated()`).
     pub fn is_collapsing(&self) -> bool {
         self.semantic() == Semantic::Collapse
+    }
+
+    /// JTMS justification link (`depends_on`): frontier-stage, but defeats its SOURCE (not its
+    /// target) once all the source's justifications are gone. See `defeated()`.
+    pub fn is_justifying(&self) -> bool {
+        self.semantic() == Semantic::Justify
     }
 
     /// Surfacing-stage subsumption: a "generic" relatedness edge (the proximity linker's
@@ -123,6 +149,18 @@ pub struct Relation {
     pub object: Id,
 }
 
+/// The deficiency / known-debt axis (design §3b) — ORTHOGONAL to confidence. A belief can be
+/// maximally entrenched (definitely true) AND maximally deficient (a known compromise that should
+/// change). None for ordinary beliefs. `forcing_constraint` is *why* the debt is accepted;
+/// `revisit_when` is the trigger to rework it (when the constraint lifts, the debt should resurface —
+/// modelled as a `blocked_on` edge to the constraint belief when one exists).
+#[derive(Debug, Clone)]
+pub struct Deficiency {
+    pub severity: String,           // "low" | "medium" | "high"
+    pub forcing_constraint: String, // why we accept the debt
+    pub revisit_when: Option<String>, // the condition under which to rework it
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Belief {
     pub id: Id,
@@ -147,24 +185,30 @@ pub struct Belief {
     /// ISO-8601 transaction time (when recorded). Lexically ordered. Lets the judge only
     /// propose supersedes from the genuinely-newer belief.
     pub txn_time: String,
+    /// Known-debt envelope (§3b), present iff this belief records a compromise. Orthogonal to
+    /// confidence: a deficient belief is still true and current — it just should change.
+    pub deficiency: Option<Deficiency>,
+    /// Free-text markdown body (everything after the frontmatter). For a reified edge-belief this
+    /// is the Linker's rationale / carry-over note; for a content belief it's the `--body` detail.
+    /// Empty when absent. Surfaced by `mem expand` so a defeating edge can carry the displaced point.
+    pub body: String,
 }
 
 impl Belief {
     /// Parse one belief markdown file (YAML-ish frontmatter). Hand-rolled, zero-dep.
     pub fn parse(text: &str) -> Option<Belief> {
         let mut fm: Vec<&str> = Vec::new();
-        let mut started = false;
+        let mut body_lines: Vec<&str> = Vec::new();
+        let mut state = 0u8; // 0 = before frontmatter, 1 = inside frontmatter, 2 = body
         for line in text.lines() {
-            if line.trim_end() == "---" {
-                if !started {
-                    started = true;
-                } else {
-                    break;
-                }
+            if state < 2 && line.trim_end() == "---" {
+                state += 1;
                 continue;
             }
-            if started {
-                fm.push(line);
+            match state {
+                1 => fm.push(line),
+                2 => body_lines.push(line),
+                _ => {}
             }
         }
         if fm.is_empty() {
@@ -177,6 +221,8 @@ impl Belief {
         let mut pending_edge_kind: Option<EdgeKind> = None;
         let (mut rel_kind, mut rel_subj, mut rel_obj) =
             (None::<EdgeKind>, String::new(), String::new());
+        let (mut def_sev, mut def_fc, mut def_rw) =
+            (String::new(), String::new(), None::<String>);
 
         for line in fm {
             let indent = line.len() - line.trim_start().len();
@@ -262,6 +308,17 @@ impl Belief {
                             b.txn_time = v.trim().to_string();
                         }
                     }
+                    // known-debt envelope (§3b): free-text values, single line each.
+                    "deficiency" => {
+                        if let Some(v) = trimmed.strip_prefix("severity:") {
+                            def_sev = v.trim().to_string();
+                        } else if let Some(v) = trimmed.strip_prefix("forcing_constraint:") {
+                            def_fc = v.trim().to_string();
+                        } else if let Some(v) = trimmed.strip_prefix("revisit_when:") {
+                            let v = v.trim();
+                            def_rw = if v.is_empty() || v == "null" { None } else { Some(v.to_string()) };
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -270,8 +327,17 @@ impl Belief {
         if b.id.is_empty() {
             return None;
         }
+        b.body = body_lines.join("\n").trim().to_string();
         if let (Some(kind), false, false) = (rel_kind, rel_subj.is_empty(), rel_obj.is_empty()) {
             b.relation = Some(Relation { kind, subject: rel_subj, object: rel_obj });
+        }
+        // a deficiency needs at least its forcing_constraint to be meaningful
+        if !def_fc.is_empty() {
+            b.deficiency = Some(Deficiency {
+                severity: if def_sev.is_empty() { "medium".into() } else { def_sev },
+                forcing_constraint: def_fc,
+                revisit_when: def_rw,
+            });
         }
         Some(b)
     }
@@ -513,6 +579,32 @@ impl Graph {
     pub fn defeated(&self) -> HashSet<Id> {
         let mut defeated: HashSet<Id> = HashSet::new(); // all defeated (supersession OR verdict)
         let mut by_verdict: HashSet<Id> = HashSet::new(); // defeated by a non-monotonic kind
+
+        // JTMS justification map (`depends_on`): dependent-id → its justification targets, each
+        // tagged with the carrier whose defeat removes that edge (None = inline edge, always in
+        // force; Some(eb) = a reified edge-belief, in force only while undefeated). Built once;
+        // empty on every corpus/real store today (no `depends_on` edges yet), so the closure below
+        // is inert and `defeated()` is unchanged until a Linker authors them. (V5/N4.)
+        let mut dep_map: HashMap<Id, Vec<(Id, Option<Id>)>> = HashMap::new();
+        for b in &self.beliefs {
+            for e in &b.edges {
+                if matches!(e.kind, EdgeKind::DependsOn) && self.id_index.contains_key(&e.target) {
+                    dep_map.entry(b.id.clone()).or_default().push((e.target.clone(), None));
+                }
+            }
+            if let Some(r) = &b.relation {
+                if matches!(r.kind, EdgeKind::DependsOn)
+                    && self.id_index.contains_key(&r.subject)
+                    && self.id_index.contains_key(&r.object)
+                {
+                    dep_map
+                        .entry(r.subject.clone())
+                        .or_default()
+                        .push((r.object.clone(), Some(b.id.clone())));
+                }
+            }
+        }
+
         for _ in 0..(self.beliefs.len() + 5) {
             let (mut next, mut next_v): (HashSet<Id>, HashSet<Id>) = (HashSet::new(), HashSet::new());
             for b in &self.beliefs {
@@ -551,6 +643,34 @@ impl Graph {
                     }
                 }
             }
+            // JTMS closure (`depends_on`): a belief goes OUT when it has ≥1 in-force justification
+            // and ALL of them are defeated. Iterate to internal closure so a chain a→b→c collapses
+            // fully within this outer step; cascades compose with the native defeat above. A belief
+            // whose justification EDGES are all removed (carrier defeated) is left alone — that's a
+            // retracted dependency, not a retracted belief (conservative: never over-retract).
+            if !dep_map.is_empty() {
+                loop {
+                    let mut changed = false;
+                    for (dependent, js) in &dep_map {
+                        if next.contains(dependent) {
+                            continue;
+                        }
+                        let active: Vec<&Id> = js
+                            .iter()
+                            .filter(|(_, carrier)| carrier.as_ref().map_or(true, |c| !next.contains(c)))
+                            .map(|(tgt, _)| tgt)
+                            .collect();
+                        if !active.is_empty() && active.iter().all(|j| next.contains(*j)) {
+                            next.insert(dependent.clone());
+                            changed = true;
+                        }
+                    }
+                    if !changed {
+                        break;
+                    }
+                }
+            }
+
             if next == defeated && next_v == by_verdict {
                 return defeated;
             }
@@ -583,6 +703,110 @@ mod tests {
         assert!(k.is_collapsing());
         // and it is NOT a defeat — a duplicate isn't false, just redundant
         assert!(!k.is_defeating());
+    }
+
+    #[test]
+    fn parses_the_deficiency_envelope() {
+        let md = "---\n\
+id: b_def\n\
+slug: wasm-save-ts-hardcoded\n\
+claim:\n  kind: text\n  text: >-\n    The WASM save timestamp is hardcoded to 0.\n\
+confidence:\n  directness: stated\n  source_weight: 0.9\n\
+deficiency:\n  severity: high\n  forcing_constraint: no wall-clock available in the WASM sandbox\n  revisit_when: when WASI clock support lands\n\
+edges: []\n---\n\nbody\n";
+        let b = Belief::parse(md).expect("parses");
+        let d = b.deficiency.expect("has a deficiency envelope");
+        assert_eq!(d.severity, "high");
+        assert_eq!(d.forcing_constraint, "no wall-clock available in the WASM sandbox");
+        assert_eq!(d.revisit_when.as_deref(), Some("when WASI clock support lands"));
+        // an ordinary belief has none
+        let plain = Belief::parse("---\nid: b_x\nslug: x\nclaim:\n  kind: text\n  text: >-\n    plain\n---\n").unwrap();
+        assert!(plain.deficiency.is_none());
+    }
+
+    #[test]
+    fn parses_the_markdown_body() {
+        // a content belief's body (the `--body` detail) is captured, trimmed of edge whitespace
+        let b = Belief::parse(
+            "---\nid: b_x\nslug: x\nclaim:\n  kind: text\n  text: >-\n    claim\n---\n\nthe detail\n",
+        )
+        .unwrap();
+        assert_eq!(b.body, "the detail");
+        // no body → empty (not whitespace)
+        let none = Belief::parse("---\nid: b_y\nslug: y\nclaim:\n  kind: text\n  text: >-\n    c\n---\n").unwrap();
+        assert_eq!(none.body, "");
+        // a reified edge-belief carries the Linker's rationale as its body — this is what
+        // `mem expand` surfaces so a defeating edge can carry the displaced point forward
+        let edge = Belief::parse(
+            "---\nid: b_e\nslug: rel-e\nclaim:\n  kind: text\n  text: >-\n    [b_a] supersedes [b_b]\n\
+relation:\n  kind: supersedes\n  subject: b_a\n  object: b_b\n---\n\n\
+judge: A restates B\ncarries: the load-bearing mechanism\n",
+        )
+        .unwrap();
+        assert!(edge.relation.is_some());
+        assert_eq!(edge.body, "judge: A restates B\ncarries: the load-bearing mechanism");
+    }
+
+    #[test]
+    fn depends_on_is_a_justify_semantic_not_a_defeat() {
+        let k = EdgeKind::parse("depends_on");
+        assert_eq!(k, EdgeKind::DependsOn);
+        assert_eq!(k.as_str(), "depends_on");
+        assert_eq!(k.semantic(), Semantic::Justify);
+        assert!(k.is_justifying());
+        assert!(!k.is_defeating(), "depends_on must NOT defeat its target");
+    }
+
+    #[test]
+    fn depends_on_never_defeats_its_target() {
+        // a depends_on b — b is live, so neither goes out (the edge points dependent→justification).
+        let mut a = content("a", "a");
+        a.edges.push(Edge { kind: EdgeKind::DependsOn, target: "b".into() });
+        let g = Graph::from_beliefs(vec![a, content("b", "b")]);
+        assert!(g.defeated().is_empty());
+    }
+
+    #[test]
+    fn depends_on_retracts_dependent_when_sole_justification_dies_transitively() {
+        // theorem ⟶depends_on⟶ lemma ⟶depends_on⟶ axiom. Retract the axiom: JTMS takes lemma AND
+        // theorem OUT (the cascade). This is the unsound case `supports` alone leaves floating (V5).
+        let mut lemma = content("lm", "lemma");
+        lemma.edges.push(Edge { kind: EdgeKind::DependsOn, target: "ax".into() });
+        let mut theorem = content("th", "theorem");
+        theorem.edges.push(Edge { kind: EdgeKind::DependsOn, target: "lm".into() });
+
+        // baseline: nothing retracted → all current
+        let g = Graph::from_beliefs(vec![content("ax", "axiom"), lemma.clone(), theorem.clone()]);
+        assert!(g.defeated().is_empty(), "no retraction → all current");
+
+        // retract the axiom with a `retracts` verdict
+        let mut retractor = content("r", "retractor");
+        retractor.edges.push(Edge { kind: EdgeKind::Retracts, target: "ax".into() });
+        let g = Graph::from_beliefs(vec![content("ax", "axiom"), lemma, theorem, retractor]);
+        let d = g.defeated();
+        assert!(d.contains("ax"), "axiom retracted");
+        assert!(d.contains("lm"), "lemma depends on the dead axiom → OUT");
+        assert!(d.contains("th"), "theorem transitively OUT");
+    }
+
+    #[test]
+    fn depends_on_survives_while_one_justification_lives() {
+        // thm depends on {ax1, ax2}. Retract ax1 only → survives; retract both → OUT. (No over-retraction.)
+        let mut th = content("th", "thm");
+        th.edges.push(Edge { kind: EdgeKind::DependsOn, target: "a1".into() });
+        th.edges.push(Edge { kind: EdgeKind::DependsOn, target: "a2".into() });
+        let mut r1 = content("r1", "retract1");
+        r1.edges.push(Edge { kind: EdgeKind::Retracts, target: "a1".into() });
+
+        let g = Graph::from_beliefs(vec![th.clone(), content("a1", "ax1"), content("a2", "ax2"), r1.clone()]);
+        let d = g.defeated();
+        assert!(d.contains("a1"));
+        assert!(!d.contains("th"), "one justification still lives → thm survives");
+
+        let mut r2 = content("r2", "retract2");
+        r2.edges.push(Edge { kind: EdgeKind::Retracts, target: "a2".into() });
+        let g = Graph::from_beliefs(vec![th, content("a1", "ax1"), content("a2", "ax2"), r1, r2]);
+        assert!(g.defeated().contains("th"), "all justifications dead → thm OUT");
     }
 
     #[test]

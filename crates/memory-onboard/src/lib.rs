@@ -599,6 +599,12 @@ pub struct Draft {
     /// decision | supersession | debt | episode — the model's read of the claim's shape.
     pub shape: String,
     pub asserted: f32,
+    /// TIER-2 deficiency envelope (§3b), filled only for debt-shaped drafts: severity
+    /// (low/medium/high), the forcing constraint (why we accept the debt), and the revisit
+    /// condition. Empty `def_forcing` ⇒ no deficiency block is emitted.
+    pub def_severity: String,
+    pub def_forcing: String,
+    pub def_revisit: Option<String>,
 }
 
 /// Pick `limit` leads worth an LLM call: doc pointers excluded (they're tier-2 reading
@@ -725,8 +731,55 @@ pub fn escalate_lead(repo: &Path, lead: &Lead, url: &str, model: &str) -> Result
         why: v.get("why").and_then(|w| w.as_str()).unwrap_or("").trim().to_string(),
         shape: v.get("kind").and_then(|k| k.as_str()).unwrap_or("decision").to_string(),
         asserted: v.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.5) as f32,
+        def_severity: String::new(),
+        def_forcing: String::new(),
+        def_revisit: None,
     })
 }
+
+/// TIER-2 extraction (design §3b): turn a kept DEBT draft into a structured deficiency. The
+/// frontier/strong model reads the debt evidence and names (a) severity by blast radius, (b) the
+/// FORCING CONSTRAINT — the external reason the debt is accepted (not a restatement of the kludge),
+/// and (c) the REVISIT condition (when the constraint lifts) or null. Mutates `draft` in place;
+/// leaves it untouched on model failure (the belief still ships, just without the debt envelope).
+pub fn enrich_deficiency(repo: &Path, draft: &mut Draft, url: &str, model: &str) {
+    let user = format!(
+        "DEBT belief: {}\nwhy: {}\nevidence:\n{}\ncontext:\n{}",
+        draft.claim,
+        draft.why,
+        draft.lead.evidence,
+        lead_context(repo, &draft.lead),
+    );
+    let Ok(v) = memory_embed::chat_json(url, model, TIER2_SYSTEM, &user) else { return };
+    let fc = v.get("forcing_constraint").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    if fc.is_empty() {
+        return; // no real constraint extracted → not a structured deficiency
+    }
+    draft.def_forcing = fc;
+    draft.def_severity = match v.get("severity").and_then(|x| x.as_str()).unwrap_or("medium").trim() {
+        "low" => "low",
+        "high" => "high",
+        _ => "medium",
+    }
+    .to_string();
+    let rw = v.get("revisit_when").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    draft.def_revisit = if rw.is_empty() || rw.eq_ignore_ascii_case("null") || rw.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(rw)
+    };
+}
+
+const TIER2_SYSTEM: &str = "You structure a known-DEBT belief into its deficiency envelope. The \
+belief states a compromise/kludge/limitation that is TRUE and CURRENT but should change. From the \
+evidence extract: \"severity\" (low|medium|high by blast radius — low=cosmetic/local, \
+high=correctness or wide reach), \"forcing_constraint\" (the EXTERNAL reason the debt is accepted — \
+a missing upstream feature, a platform limit, a compatibility need; NOT a restatement of the kludge \
+itself), and \"revisit_when\" (the SPECIFIC real condition under which to rework it, naming the \
+actual upstream/feature from the evidence — null if none is stated or implied; output a real \
+condition or null, NEVER a placeholder template). Ground every field in the evidence; never invent a \
+constraint. If there is no genuine external forcing constraint, return forcing_constraint:\"\". \
+Reply ONLY JSON {\"severity\":\"low|medium|high\",\"forcing_constraint\":\"...\",\"revisit_when\":\"... or null\"}.";
 
 pub fn drafts_json(repo_id: &str, model: &str, drafts: &[Draft]) -> String {
     let mut s = format!(
@@ -737,12 +790,15 @@ pub fn drafts_json(repo_id: &str, model: &str, drafts: &[Draft]) -> String {
     for (i, d) in drafts.iter().enumerate() {
         let refs: Vec<String> = d.lead.refs.iter().map(|r| format!("\"{}\"", jesc(r))).collect();
         s.push_str(&format!(
-            "{{\"keep\":{},\"shape\":\"{}\",\"confidence\":{:.2},\"claim\":\"{}\",\"why\":\"{}\",\"lead_kind\":\"{}\",\"lead_title\":\"{}\",\"refs\":[{}],\"date\":\"{}\",\"evidence\":\"{}\"}}{}\n",
+            "{{\"keep\":{},\"shape\":\"{}\",\"confidence\":{:.2},\"claim\":\"{}\",\"why\":\"{}\",\"def_severity\":\"{}\",\"def_forcing\":\"{}\",\"def_revisit\":\"{}\",\"lead_kind\":\"{}\",\"lead_title\":\"{}\",\"refs\":[{}],\"date\":\"{}\",\"evidence\":\"{}\"}}{}\n",
             d.keep,
             jesc(&d.shape),
             d.asserted,
             jesc(&d.claim),
             jesc(&d.why),
+            jesc(&d.def_severity),
+            jesc(&d.def_forcing),
+            jesc(d.def_revisit.as_deref().unwrap_or("")),
             d.lead.kind.as_str(),
             jesc(&d.lead.title),
             refs.join(","),
@@ -798,6 +854,12 @@ pub fn load_kept_drafts(path: &Path) -> Result<Vec<Draft>, String> {
             why: s(d, "why"),
             shape: s(d, "shape"),
             asserted: d.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.5) as f32,
+            def_severity: s(d, "def_severity"),
+            def_forcing: s(d, "def_forcing"),
+            def_revisit: {
+                let rw = s(d, "def_revisit");
+                if rw.is_empty() { None } else { Some(rw) }
+            },
         });
     }
     Ok(out)
@@ -823,6 +885,39 @@ pub fn drafts_md(repo_id: &str, model: &str, drafts: &[Draft]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deficiency_fields_round_trip_through_drafts_json() {
+        let d = Draft {
+            lead: Lead {
+                kind: LeadKind::Debt,
+                title: "HACK: stub".into(),
+                evidence: "platform_check.php shipped as an empty no-op".into(),
+                refs: vec!["src/platform_check.php:1".into()],
+                date: "2025-01-01".into(),
+                score: 1.0,
+            },
+            keep: true,
+            claim: "platform_check.php is shipped as an empty no-op stub".into(),
+            why: "the file body is a bare `return;`".into(),
+            shape: "debt".into(),
+            asserted: 0.8,
+            def_severity: "high".into(),
+            def_forcing: "the real platform check isn't portable to the target runtime".into(),
+            def_revisit: Some("when the runtime exposes the capability API".into()),
+        };
+        let json = drafts_json("r", "m", std::slice::from_ref(&d));
+        let dir = std::env::temp_dir().join("onboard-def-rt");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("drafts.json");
+        std::fs::write(&path, &json).unwrap();
+        let back = load_kept_drafts(&path).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].def_severity, "high");
+        assert_eq!(back[0].def_forcing, "the real platform check isn't portable to the target runtime");
+        assert_eq!(back[0].def_revisit.as_deref(), Some("when the runtime exposes the capability API"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn reverted_sha_parses_stock_git_body() {

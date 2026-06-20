@@ -152,16 +152,25 @@ A/B, like the §3a ConfidenceModel race.
 
 - `Q1` ✅ **Resolved** (above): agent hints; versioned Linker is sole author of machine
   edges; hint → provenance to originating claim; edges are a regenerable derived layer.
-- `Q2` Sync vs async Linker default, and the freshness contract for a recall issued
-  right after a write. (Leaning: hints sync, enrichment async.)
-- `Q3` Linker tiers & escalation policy — when does a cheap proposal get escalated to
-  the LLM linker or queued for human confirmation?
-- `Q4` Cost: the Linker runs LLM inference over every new belief's neighborhood.
-  Budget/incrementality bounds; batch consolidation vs per-write.
-- `Q5` Edge-on-edge traversal/termination in the reified graph (`Q` above).
-- `Q6` Does `derived_from` truly stay inline, or do we want even reduction-inputs
-  independently arguable? (Leaning: inline — it's self-provenance, argue the reduction.)
-- `Q7` Bootstrapping: the corpora currently encode edges inline in frontmatter. If
-  edges become edge-beliefs, the corpus emitter / eval must normalize inline → edge-
-  beliefs (and assign each a linker-author). Affects the hand-off harness.
+Q2–Q7 settled 2026-06-15 by the design-judgment pass (V6 in
+[open-questions-eval.md](open-questions-eval.md)) — mostly *confirming what the code already does*:
+
+- `Q2` ✅ **Hints sync, enrichment async.** Implemented: `SupersedeHintLinker` is Cheap/OnWrite
+  (promotes the author hint to a `supersedes` edge at write, so currency is never missing);
+  Proximity/Judgment run at Nrem/Rem. Freshness contract: a recall right after a write sees the
+  hint-edges, not the deep edges.
+- `Q3` ✅ **3 tiers, gated by stakes×budget; candidate-gen vs judgment split.** Cheap linkers
+  (kNN + rules) *generate candidates*; the Mid `JudgmentLinker` (qwen2.5) only *judges* relations on
+  them; escalate big judges only for high-stakes kinds (supersedes/attacks). Expensive tier reserved.
+- `Q4` ✅ **Per-write incremental over the new belief's neighborhood; deep LLM pass batched at REM.**
+  Mirrors the reduction-cache discipline; LLM cost stays off the write hot path.
+- `Q5` ✅ **No hard edge-on-edge depth cap.** Rely on frontier-relative in-force (a defeated
+  edge-belief drops out) + generic-edge subsumption (`is_generic()` hides `relates-to`/`analogous`
+  when a specific edge exists). Real-store edge-on-edge depth ≈ 1; a cap is premature.
+- `Q6` ✅ **`derived_from` stays inline.** It's self-provenance (a reducer's own inputs), not a claim
+  about two *other* beliefs — you argue it by arguing the reduction. Confirmed.
+- `Q7` ✅ **Normalize inline → edge-beliefs at ingestion, linker-authored.** The corpora encode 285
+  inline edges in frontmatter; the live store already reifies. The eval/handoff harness must emit
+  linker-authored edge-beliefs to match the live shape — this is what makes the corpus's hand-placed
+  edges a valid **entrenchment reference** for the Linker A/B (the one big still-open experiment).
 ```

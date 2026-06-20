@@ -12,7 +12,7 @@
 use memory_consolidate::{novelty_pair_key, Consolidator, NoveltyDreamer, Orchestrator, ProbeRecord, Reducer};
 use memory_core::{
     content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, Graph, Hint, LinkCtx,
-    LinkProposal, Relation,
+    LinkProposal, Relation, StructuralConfidence,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -83,6 +83,9 @@ fn main() {
         Some("consolidate") => cmd_consolidate(&args[1..]),
         Some("reduce") => cmd_reduce(&args[1..]),
         Some("dream") => cmd_dream(&args[1..]),
+        Some("review") => cmd_review(&args[1..]),
+        Some("link") => cmd_link(&args[1..]),
+        Some("debt") => cmd_debt(&args[1..]),
         Some("onboard") => cmd_onboard(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
@@ -96,7 +99,10 @@ fn main() {
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
             eprintln!("  mem reduce [--dry-run]        # collapse duplicate beliefs: recall folds them behind one rep");
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
-            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--commit]  # lead harvest → claim drafts → store");
+            eprintln!("  mem review [--limit N]        # list edges flagged for frontier review (candidate depends_on)");
+            eprintln!("  mem link <subj> <kind> <obj> [--rationale R]  # author a durable edge (frontier/human adjudication)");
+            eprintln!("  mem debt [<query>]            # list known-debt (deficiency) beliefs; ⚠ resurfaces when a blocked_on constraint lifts");
+            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--tier2] [--commit]  # lead harvest → claim drafts (+§3b debt envelope) → store");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -172,12 +178,15 @@ fn cmd_recall(args: &[String]) {
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
         Ok(g) => g,
-        Err(_) => { println!("No memories yet."); return; }
+        Err(_) => { println!("No memories yet. Add one:  mem remember \"<a thing you learned>\""); return; }
     };
     // scope-filter BEFORE resolving the frontier (gives branch divergence for free)
     let sg = scoped_graph(&g, &scopes);
     if sg.is_empty() {
-        println!("No memories in scope ({}).", scopes.join(", "));
+        println!(
+            "Nothing in scope ({}). Add one:  mem remember \"<claim>\"   (or onboard a repo:  mem onboard <repo>)",
+            scopes.join(", ")
+        );
         return;
     }
     let defeated = sg.defeated();
@@ -189,19 +198,27 @@ fn cmd_recall(args: &[String]) {
         Err(reason) => (lexical(&current, &query), format!("lexical fallback ({reason})")),
     };
     if hits.is_empty() {
-        println!("Nothing current recalled for \"{query}\".");
+        if dropped > 0 {
+            println!("Nothing CURRENT for \"{query}\" — but {dropped} matching belief(s) here were superseded/retracted (the answer changed over time).");
+        } else {
+            println!("Nothing recalled for \"{query}\". Try fewer/broader words, or add it:  mem remember \"<claim>\"");
+        }
         return;
     }
-    // Current-edge index (drives both the corroboration boost and the affordances below).
+    // Current-edge index (drives the affordances below).
     let adj = sg.adjacency(&defeated);
-    // BOOST (surfacing-stage): lift well-corroborated hits by their incoming `supports` count.
-    // A gentle, capped, multiplicative nudge on the cosine score — re-rank BEFORE we truncate so
-    // the boost can pull a well-supported near-tie into the top-N, but never leapfrog a clearly
-    // nearer hit. Lexical fallback (None scores) is left untouched. Truth is unchanged.
+    // CONFIDENCE BOOST (surfacing-stage, V1): gently re-rank current hits by their STRUCTURAL
+    // confidence weight — directness × source_weight × corroboration × recency — not corroboration
+    // alone. V1 measured recency + directness as load-bearing (the supports-only boost missed them).
+    // Capped + multiplicative so a higher-confidence belief pulls a near-tie into the top-N but never
+    // leapfrogs a clearly-nearer hit (semantic similarity stays dominant). Re-rank BEFORE truncate.
+    // Lexical fallback (None scores) is left untouched. Truth/frontier are unchanged.
+    let conf = StructuralConfidence::build(&sg, &defeated);
     for (id, _slug, _claim, score) in hits.iter_mut() {
         if let Some(s) = score {
-            let raw = adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]);
-            *s *= support_boost(incoming_supports(id, raw));
+            if let Some(b) = sg.by_id(id) {
+                *s *= confidence_boost(conf.weight(b));
+            }
         }
     }
     hits.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
@@ -248,10 +265,23 @@ fn cmd_recall(args: &[String]) {
         }
         let tag = if aff.is_empty() { String::new() } else { format!("   ({aff} → mem expand)") };
         // Name what it conflicts with (the other endpoint of the attacks edge), falling back to a
-        // bare flag if we somehow can't resolve a slug.
+        // bare flag if we somehow can't resolve a slug. Carry the Dubois–Prade ⟨necessity,possibility⟩
+        // band (V1 affordance, carry-don't-drive): a contested CURRENT belief keeps its necessity but
+        // shows a depressed possibility — the honest "still current, but under live attack" signal.
         let warn = if contested {
             let named = contest_str(id, &edges, &slug_of);
-            if named.is_empty() { "  ⚠ contested".to_string() } else { format!("  ⚠ {named}") }
+            let band = sg
+                .by_id(id)
+                .map(|b| {
+                    let (poss, nec) = conf.possibility_necessity(b);
+                    format!(" [nec {nec:.2}·poss {poss:.2}]")
+                })
+                .unwrap_or_default();
+            if named.is_empty() {
+                format!("  ⚠ contested{band}")
+            } else {
+                format!("  ⚠ {named}{band}")
+            }
         } else {
             String::new()
         };
@@ -305,6 +335,13 @@ fn cmd_recall(args: &[String]) {
             }
         }
     }
+
+    // FRONTIER-REVIEW NUDGE (surfacing-stage): if the cheap judge left candidate justifications the
+    // tool can't safely adjudicate, tell the consuming agent — it's the MAXIMUM judge (see `mem review`).
+    let n_review = depends_on_candidates(&sg, &defeated).len();
+    if n_review > 0 {
+        println!("\n⚑ {n_review} edge(s) may be justifications (depends_on) — run `mem review` to adjudicate.");
+    }
 }
 
 /// `mem expand <slug|id>` — one hop. Shows a belief and its CURRENT linked neighbors, grouped by
@@ -345,6 +382,15 @@ fn cmd_expand(args: &[String]) {
         };
         let mark = if defeated.contains(&nb.id) { "  [superseded]" } else { "" };
         println!("  {label:>14}  [{}] {}{}", nb.slug, nb.claim, mark);
+        // Surface the reified edge's rationale/carry-over note (Linker authored it). This is where
+        // a defeating edge carries the displaced point, so an agent sees WHY without re-expanding
+        // the loser. The edge-belief id is deterministic from (kind, subject, object).
+        let edge_id = content_id(&format!("{}|{}|{}", r.kind.as_str(), r.subject, r.object));
+        if let Some(note) = sg.by_id(&edge_id).map(|e| e.body.trim()).filter(|s| !s.is_empty()) {
+            for (i, ln) in note.lines().enumerate() {
+                println!("                  {} {ln}", if i == 0 { "↳" } else { " " });
+            }
+        }
         printed += 1;
     }
     if printed == 0 {
@@ -389,7 +435,8 @@ fn cmd_ask(args: &[String]) {
         Err(_) => { println!("No memories yet."); return; }
     };
     let sg = scoped_graph(&g, &scopes);
-    let current = sg.current_content(&sg.defeated());
+    let defeated = sg.defeated();
+    let current = sg.current_content(&defeated);
     if current.is_empty() {
         println!("No memory in scope ({}).", scopes.join(", "));
         return;
@@ -408,9 +455,26 @@ fn cmd_ask(args: &[String]) {
         return;
     }
 
+    // DETERMINISTIC CONFLICT PASS (V4/N3): the reducer is frontier-pre-filtered (we feed only
+    // `current` beliefs), but V4 showed the LLM silently adopts a contradiction ~5/6 of the time
+    // rather than surfacing it. So we detect live `attacks` BETWEEN the recalled beliefs ourselves —
+    // genuine open conflicts (both endpoints current) — tell the model about them, and surface them
+    // unconditionally afterward regardless of what the LLM volunteers. This is the conflict half of
+    // the trusted-reducer gate; the frontier pre-filter is the other half.
+    let detected_conflicts = live_conflicts_among_hits(&sg, &defeated, &hits);
+
     let mut ctx = format!("Question: {question}\n\nBeliefs:\n");
     for (_id, slug, claim, _s) in &hits {
         ctx.push_str(&format!("- [{slug}] {claim}\n"));
+    }
+    if !detected_conflicts.is_empty() {
+        ctx.push_str(
+            "\nKNOWN CONFLICTS — these recalled beliefs directly attack each other and are BOTH \
+             current. Do NOT silently pick a side; report the disagreement in `conflicts`:\n",
+        );
+        for (a, b) in &detected_conflicts {
+            ctx.push_str(&format!("- [{a}] vs [{b}]\n"));
+        }
     }
 
     let model = std::env::var("ASK_MODEL")
@@ -445,6 +509,46 @@ fn cmd_ask(args: &[String]) {
             }
         }
     }
+
+    // Surface the edge-grounded conflicts unconditionally (after synthesis, even if Ollama was
+    // down): these are ground truth from the graph, not the LLM's discretion. The model's free-text
+    // `conflicts` above can ADD semantic conflicts the edges don't encode; these are the floor.
+    for (a, b) in &detected_conflicts {
+        println!("⚠ conflict (live attack): [{a}] vs [{b}] — both current, surfaced not resolved");
+    }
+}
+
+/// Detect genuine open conflicts among the recalled hits: unordered pairs `(slugA, slugB)` joined by
+/// a CURRENT `attacks` edge where BOTH endpoints are in the hit set. Deterministic, dedup'd. This is
+/// the conflict half of the trusted-reducer gate (V4/N3) — the reducer can't be relied on to
+/// volunteer a contradiction, so the graph surfaces it.
+fn live_conflicts_among_hits(g: &Graph, defeated: &std::collections::HashSet<String>, hits: &[Hit]) -> Vec<(String, String)> {
+    let hit_ids: std::collections::HashSet<&str> = hits.iter().map(|(id, _, _, _)| id.as_str()).collect();
+    let adj = g.adjacency(defeated);
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (id, _slug, _claim, _score) in hits {
+        for r in adj.get(id).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if r.kind != EdgeKind::Attacks {
+                continue;
+            }
+            let other = if &r.subject == id { &r.object } else { &r.subject };
+            if other == id || !hit_ids.contains(other.as_str()) {
+                continue;
+            }
+            let (lo, hi) = if id.as_str() < other.as_str() {
+                (id.clone(), other.clone())
+            } else {
+                (other.clone(), id.clone())
+            };
+            if seen.insert((lo.clone(), hi.clone())) {
+                let sa = g.by_id(&lo).map(|x| x.slug.clone()).unwrap_or(lo);
+                let sb = g.by_id(&hi).map(|x| x.slug.clone()).unwrap_or(hi);
+                out.push((sa, sb));
+            }
+        }
+    }
+    out
 }
 
 /// Machine-inferred edge authors whose edges are a REGENERABLE layer (redrawn by an unattended
@@ -743,28 +847,15 @@ fn affordance_str(edges: &[Relation]) -> (String, bool) {
     (parts.join(" · "), contested)
 }
 
-/// SURFACING-STAGE boost. Count of *current* incoming `supports` edges (object == anchor) — i.e.
-/// how many undefeated beliefs corroborate this one. Entrenchment, not a self-rated confidence
-/// field: "there is no gold, only entrenchment". Only `supports` (not refines/derived_from) counts.
-fn incoming_supports(anchor: &str, edges: &[Relation]) -> usize {
-    edges
-        .iter()
-        .filter(|r| r.kind == EdgeKind::Supports && r.object == anchor)
-        .count()
-}
-
-/// Capped, saturating, MULTIPLICATIVE corroboration nudge for the cosine score. Returns a factor
-/// in [1.0, 1.0+SUPPORT_BOOST_CAP] that grows with the count of incoming `supports` but never lets
-/// a far-but-supported belief leapfrog a clearly-nearer one — semantic similarity stays dominant.
-/// Saturates: 1 supporter buys most of the lift, each extra supporter buys diminishingly less.
-fn support_boost(n_supports: usize) -> f32 {
-    const SUPPORT_BOOST_CAP: f32 = 0.12; // ≤12% — a gentle tie-breaker, not a re-ranking
-    if n_supports == 0 {
-        return 1.0;
-    }
-    // 1 - 1/(1+n): 0.50 @1, 0.67 @2, 0.75 @3, 0.80 @4 … → 1.0 as n→∞. Saturating by construction.
-    let saturating = 1.0 - 1.0 / (1.0 + n_supports as f32);
-    1.0 + SUPPORT_BOOST_CAP * saturating
+/// SURFACING-STAGE confidence nudge for the cosine score (V1). `w` is a belief's structural
+/// confidence weight in [0,1] (`StructuralConfidence::weight` — directness × source_weight ×
+/// corroboration × recency). Returns a multiplicative factor in [1.0, 1.0+CONFIDENCE_BOOST_CAP],
+/// linear in `w`: a higher-confidence belief floats up on a near-tie but, capped at ≤12%, never lets
+/// a far belief leapfrog a clearly-nearer one — semantic similarity stays dominant. Replaces the old
+/// supports-only boost (V1: recency + directness are load-bearing, not just corroboration count).
+fn confidence_boost(w: f32) -> f32 {
+    const CONFIDENCE_BOOST_CAP: f32 = 0.12; // ≤12% — a gentle tie-breaker, not a re-ranking
+    1.0 + CONFIDENCE_BOOST_CAP * w.clamp(0.0, 1.0)
 }
 
 /// Name what a hit conflicts with: the slug(s) on the other endpoint of any current `attacks` edge
@@ -876,6 +967,15 @@ fn cmd_consolidate(args: &[String]) {
         total += Consolidator::commit(&dir, &props, belief_scope(t));
     }
     println!("consolidated {} belief(s); drew {} new edge(s)", targets.len(), total);
+    // Frontier-review nudge: the judge emits supports/refines but can't safely tell a justification
+    // (depends_on) from corroboration — reload and surface any candidates for on-demand adjudication.
+    if let Ok(g2) = Graph::load_dir(&dir) {
+        let sg2 = scoped_graph(&g2, &scopes);
+        let n_review = depends_on_candidates(&sg2, &sg2.defeated()).len();
+        if n_review > 0 {
+            println!("⚑ {n_review} edge(s) flagged for frontier review — run `mem review` to adjudicate (candidate depends_on).");
+        }
+    }
 }
 
 /// `mem reduce [--dry-run]` — the deterministic duplicate-collapse pass. A SURFACING-stage HIDE,
@@ -1031,6 +1131,284 @@ fn cmd_dream(args: &[String]) {
     }
 }
 
+/// A candidate justification the cheap judge couldn't safely adjudicate: an in-force
+/// `supports`/`refines` edge from a DERIVATION (subject directness inferred/reduced) to an older
+/// belief — it MIGHT be a true JTMS `depends_on`, but only a frontier agent should make that call
+/// (V5: a false depends_on wrongly retracts; qwen-7b won't author it). Surfaced by `mem review`.
+struct ReviewCandidate {
+    subject: String,
+    object: String,
+    kind: String,
+}
+
+/// Derived (not stored): the depends_on candidates on the current frontier. A pair already carrying
+/// an in-force `depends_on` is skipped (already adjudicated). "the layout is never the storage."
+fn depends_on_candidates(g: &Graph, defeated: &std::collections::HashSet<String>) -> Vec<ReviewCandidate> {
+    use std::collections::HashSet;
+    // pairs already adjudicated as depends_on → skip
+    let mut adjudicated: HashSet<(String, String)> = HashSet::new();
+    for (b, r) in g.relations() {
+        if !defeated.contains(&b.id) && matches!(r.kind, EdgeKind::DependsOn) {
+            adjudicated.insert((r.subject.clone(), r.object.clone()));
+        }
+    }
+    let mut out = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for (b, r) in g.relations() {
+        if defeated.contains(&b.id) {
+            continue; // edge must be in force
+        }
+        if !matches!(r.kind, EdgeKind::Supports | EdgeKind::Refines) {
+            continue;
+        }
+        // subject = the dependent; it must be a current DERIVATION (inferred/reduced), not a
+        // directly-observed `stated` fact (those are independently grounded — V5).
+        let Some(subj) = g.by_id(&r.subject) else { continue };
+        if defeated.contains(&subj.id) || !matches!(subj.directness.as_str(), "inferred" | "reduced") {
+            continue;
+        }
+        if g.by_id(&r.object).map_or(true, |o| defeated.contains(&o.id)) {
+            continue; // object (the ground) must be current
+        }
+        let key = (r.subject.clone(), r.object.clone());
+        if adjudicated.contains(&key) || !seen.insert(key) {
+            continue;
+        }
+        out.push(ReviewCandidate { subject: r.subject.clone(), object: r.object.clone(), kind: r.kind.as_str().to_string() });
+    }
+    out
+}
+
+/// `mem review [--limit N]` — surface edges flagged for FRONTIER adjudication. The cheap local judge
+/// (qwen) emits `supports`/`refines`; it cannot reliably tell a JTMS justification (`depends_on`) from
+/// corroboration (measured). So this lists the candidate justifications and hands them to the
+/// consumer of the tool — a Claude Code session is the MAXIMUM judge, adjudicating on demand and
+/// authoring a durable edge with `mem link`. Pure derived view; nothing is written.
+fn cmd_review(args: &[String]) {
+    let mut limit = 20usize;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--limit" {
+            limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(20);
+            i += 1;
+        }
+        i += 1;
+    }
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let defeated = sg.defeated();
+    let mut cands = depends_on_candidates(&sg, &defeated);
+    if cands.is_empty() {
+        println!("Nothing flagged for review in scope ({}).", scopes.join(", "));
+        return;
+    }
+    let total = cands.len();
+    cands.truncate(limit);
+    // Optional local-model annotation (safe — never commits): if DEPENDS_MODEL is set, ask it whether
+    // each candidate is a true dependency so the frontier agent can prioritize. A high-recall model
+    // (gemma2:9b) is the right tool here BECAUSE its false positives are just review items a human
+    // rejects — the opposite of using it to auto-author edges (measured unsafe: 1/4 specificity).
+    let depends_model = std::env::var("DEPENDS_MODEL").ok().filter(|s| !s.trim().is_empty());
+    let oll = memory_embed::Ollama::from_env();
+    if depends_model.is_some() {
+        eprintln!("annotating {} candidate(s) with {} ...", cands.len(), depends_model.as_deref().unwrap());
+    }
+    println!(
+        "{total} edge(s) flagged for frontier review — candidate justifications (is this a true depends_on?):\n"
+    );
+    for c in &cands {
+        let (subj, obj) = (sg.by_id(&c.subject), sg.by_id(&c.object));
+        let (ss, sc, sd) = subj.map(|b| (b.slug.as_str(), b.claim.as_str(), b.directness.as_str())).unwrap_or(("?", "?", "?"));
+        let (os, oc) = obj.map(|b| (b.slug.as_str(), b.claim.as_str())).unwrap_or(("?", "?"));
+        let hint = match &depends_model {
+            Some(m) => match memory_consolidate::model_thinks_depends(&oll.url, m, sc, oc) {
+                Some(true) => "   🤖 model: LIKELY depends — prioritize",
+                Some(false) => "   🤖 model: probably corroboration",
+                None => "",
+            },
+            None => "",
+        };
+        println!("• [{ss}] --{}--> [{os}]{hint}", c.kind);
+        println!("    derivation (d={sd}): {}", truncate(sc, 100));
+        println!("    ground:           {}", truncate(oc, 100));
+        println!("    if [{ss}] holds ONLY because [{os}] is true (it collapses if [{os}] is withdrawn), author it:");
+        println!("      mem link {ss} depends_on {os} --rationale \"<why it depends>\"");
+        println!();
+    }
+    if total > cands.len() {
+        println!("… {} more (raise --limit).", total - cands.len());
+    }
+    println!(
+        "Adjudicate as a frontier agent: confirm a true JTMS dependency with `mem link … depends_on …`; \
+         leave plain corroboration as-is. Authored edges are DURABLE (a re-link never overwrites them)."
+    );
+}
+
+/// `mem link <subject-ref> <kind> <object-ref> [--rationale R]` — author a DURABLE edge by hand
+/// (a frontier agent or human adjudicating). Routed through the Consolidator (the sole edge writer),
+/// authored as `frontier@1` so it is NOT a regenerable machine edge — an unattended re-link links
+/// AROUND it and never overwrites it (human/frontier edges are anchors, §edge-assignment). The
+/// primary use is closing a `mem review` candidate into a real `depends_on`.
+fn cmd_link(args: &[String]) {
+    let mut rationale = String::new();
+    let mut positionals: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--rationale" => { rationale = args.get(i + 1).cloned().unwrap_or_default(); i += 1; }
+            s if !s.starts_with("--") => positionals.push(s.to_string()),
+            _ => {}
+        }
+        i += 1;
+    }
+    if positionals.len() < 3 {
+        eprintln!("usage: mem link <subject> <kind> <object> [--rationale R]   (kind e.g. depends_on)");
+        std::process::exit(2);
+    }
+    let (subject_ref, kind_str, object_ref) =
+        (positionals[0].clone(), positionals[1].clone(), positionals[2].clone());
+
+    let kind = EdgeKind::parse(&kind_str);
+    // self-provenance never reifies; a hand-authored derived_from makes no sense here.
+    if matches!(kind, EdgeKind::DerivedFrom) {
+        eprintln!("derived_from is inline self-provenance — not authorable as an edge");
+        std::process::exit(2);
+    }
+
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let (Some(subject), Some(object)) = (sg.resolve_ref(&subject_ref), sg.resolve_ref(&object_ref)) else {
+        eprintln!(
+            "could not resolve {}{} in scope ({})",
+            if sg.resolve_ref(&subject_ref).is_none() { format!("subject '{subject_ref}'") } else { String::new() },
+            if sg.resolve_ref(&object_ref).is_none() { format!(" object '{object_ref}'") } else { String::new() },
+            scopes.join(", ")
+        );
+        std::process::exit(2);
+    };
+    if subject == object {
+        eprintln!("subject and object are the same belief — nothing to link");
+        std::process::exit(2);
+    }
+
+    let scope = sg.by_id(&subject).map(|b| belief_scope(b).to_string()).unwrap_or_else(|| "global".into());
+    let proposal = LinkProposal {
+        kind: kind.clone(),
+        subject,
+        object,
+        confidence: Confidence::Strong,
+        rationale: if rationale.trim().is_empty() {
+            "frontier adjudication".into()
+        } else {
+            format!("frontier adjudication: {}", rationale.trim())
+        },
+        linker: "frontier@1".into(), // durable: not a regenerable machine edge
+    };
+    match Consolidator::commit(&dir, std::slice::from_ref(&proposal), &scope) {
+        0 => println!("[{subject_ref}] --{}--> [{object_ref}] already linked.", kind.as_str()),
+        _ => {
+            println!(
+                "linked [{subject_ref}] --{}--> [{object_ref}] in scope={scope} (durable; authored by frontier@1).",
+                kind.as_str()
+            );
+            // Explain the consequence + point onward, so the loop is legible without docs.
+            match kind {
+                EdgeKind::DependsOn => println!(
+                    "→ [{subject_ref}] now retracts automatically if [{object_ref}] is withdrawn (JTMS). Check: mem recall \"{subject_ref}\""
+                ),
+                EdgeKind::Other(ref s) if s == "blocked_on" => println!(
+                    "→ if [{object_ref}] is later retracted (the constraint lifts), [{subject_ref}] resurfaces in: mem debt"
+                ),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// `mem debt [<query>]` — the known-debt query (§3b): "what's hacky / known-deficient around here
+/// that I shouldn't rely on or should fix?" Lists CURRENT beliefs carrying a deficiency envelope,
+/// highest severity first; an optional <query> filters semantically. RESURFACE (N5): a debt whose
+/// `blocked_on` edge points at a now-DEFEATED belief — its forcing constraint was lifted/retracted —
+/// is flagged ⚠, the structural trigger to rework it. Deterministic; no LLM.
+fn cmd_debt(args: &[String]) {
+    let query: String =
+        args.iter().filter(|a| !a.starts_with("--")).cloned().collect::<Vec<_>>().join(" ");
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let defeated = sg.defeated();
+    let mut debts: Vec<&Belief> =
+        sg.current_content(&defeated).into_iter().filter(|b| b.deficiency.is_some()).collect();
+    if debts.is_empty() {
+        println!("No known-debt beliefs in scope ({}).", scopes.join(", "));
+        return;
+    }
+    // optional semantic filter (graceful: if embeddings are missing, show everything)
+    if !query.trim().is_empty() {
+        if let Ok(hits) = rank(&dir, &debts, query.trim()) {
+            let order: Vec<String> = hits.into_iter().map(|(id, _, _, _)| id).collect();
+            debts.retain(|b| order.contains(&b.id));
+            debts.sort_by_key(|b| order.iter().position(|id| id == &b.id).unwrap_or(usize::MAX));
+            debts.truncate(8);
+        }
+    }
+    // severity-first (high → medium → low), then most-recent.
+    let sev_rank = |b: &Belief| match b.deficiency.as_ref().map(|d| d.severity.as_str()) {
+        Some("high") => 0,
+        Some("medium") => 1,
+        _ => 2,
+    };
+    if query.trim().is_empty() {
+        debts.sort_by(|a, b| sev_rank(a).cmp(&sev_rank(b)).then(b.txn_time.cmp(&a.txn_time)));
+    }
+    let adj = sg.adjacency(&defeated);
+    println!("{} known-debt belief(s) [{}]:\n", debts.len(), scopes.join("+"));
+    let mut any_resurfaced = false;
+    for b in &debts {
+        let d = b.deficiency.as_ref().unwrap();
+        // resurface: an outgoing `blocked_on` edge whose target (the constraint) is now defeated.
+        let resurfaced: Vec<String> = adj
+            .get(&b.id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .filter(|r| r.kind == EdgeKind::Other("blocked_on".into()) && r.subject == b.id)
+            .filter(|r| defeated.contains(&r.object))
+            .filter_map(|r| sg.by_id(&r.object).map(|x| x.slug.clone()))
+            .collect();
+        println!("• [{}] [{}] {}", d.severity, b.slug, truncate(&b.claim, 90));
+        println!("    forcing: {}", d.forcing_constraint);
+        if let Some(rw) = &d.revisit_when {
+            println!("    revisit: {rw}");
+        }
+        if !resurfaced.is_empty() {
+            any_resurfaced = true;
+            println!("    ⚠ RESURFACED — constraint lifted ([{}] retracted); time to rework", resurfaced.join("], ["));
+        }
+    }
+    if any_resurfaced {
+        println!(
+            "\n⚠ a RESURFACED debt's forcing constraint has lifted. After reworking the code, retire the debt:\n  mem remember \"<the new, fixed state>\" --supersedes <slug>     (or  mem forget <slug>  if simply gone)"
+        );
+    } else {
+        println!("\n(drill into any debt: mem expand <slug>)");
+    }
+}
+
 /// Tier-0 onboarding: deterministic git-history harvest → lead files for the eyeball pass.
 /// Writes OUTSIDE any repo by default (the data dir), so private-repo leads can't end up
 /// committed by accident. Leads are candidates, not beliefs — nothing touches the store.
@@ -1040,6 +1418,7 @@ fn cmd_onboard(args: &[String]) {
     let mut top = 25usize;
     let mut escalate = 0usize;
     let mut commit = false;
+    let mut tier2 = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1055,6 +1434,7 @@ fn cmd_onboard(args: &[String]) {
                 escalate = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(30);
                 i += 1;
             }
+            "--tier2" => tier2 = true,
             "--commit" => commit = true,
             a if !a.starts_with("--") => repo = PathBuf::from(a),
             _ => {}
@@ -1098,6 +1478,12 @@ fn cmd_onboard(args: &[String]) {
     );
     println!("report: {}", md_path.display());
     println!("full:   {}", json_path.display());
+    if escalate == 0 && !commit {
+        println!(
+            "\nNext → skim the report, then draft beliefs from the leads:\n  mem onboard {} --escalate 30 --tier2   (--tier2 adds §3b debt envelopes to kludge leads)",
+            repo.display()
+        );
+    }
 
     // tier 1 (opt-in): the judge model drafts a claim per selected lead, or rejects it as noise
     if escalate > 0 {
@@ -1105,11 +1491,24 @@ fn cmd_onboard(args: &[String]) {
         let model = std::env::var("JUDGE_MODEL").unwrap_or_else(|_| "qwen2.5:7b".into());
         let picked = memory_onboard::select_for_escalation(&h.leads, escalate);
         eprintln!("escalating {} lead(s) through {model} ...", picked.len());
+        // Tier-2 model: a stronger/extractive model for the deficiency structure (gemma2:9b is a
+        // good fit — extraction wants recall, and this is NOT the dangerous depends_on judgment).
+        let tier2_model = std::env::var("TIER2_MODEL").unwrap_or_else(|_| model.clone());
         let mut drafts = Vec::new();
         let mut failed = 0;
+        let mut enriched = 0;
         for (i, lead) in picked.iter().enumerate() {
             match memory_onboard::escalate_lead(&repo, lead, &url, &model) {
-                Ok(d) => drafts.push(d),
+                Ok(mut d) => {
+                    // TIER 2: for kept DEBT-shaped drafts, extract the deficiency envelope (§3b).
+                    if tier2 && d.keep && d.shape == "debt" {
+                        memory_onboard::enrich_deficiency(&repo, &mut d, &url, &tier2_model);
+                        if !d.def_forcing.is_empty() {
+                            enriched += 1;
+                        }
+                    }
+                    drafts.push(d);
+                }
                 Err(e) => {
                     failed += 1;
                     eprintln!("  lead {} failed: {e}", i + 1);
@@ -1118,6 +1517,9 @@ fn cmd_onboard(args: &[String]) {
             eprint!("\r  {}/{}", i + 1, picked.len());
         }
         eprintln!();
+        if tier2 {
+            eprintln!("tier 2: {enriched} debt draft(s) given a deficiency envelope ({tier2_model})");
+        }
         let kept = drafts.iter().filter(|d| d.keep && !d.claim.is_empty()).count();
         let dj = out_dir.join("drafts.json");
         let dm = out_dir.join("drafts.md");
@@ -1131,6 +1533,12 @@ fn cmd_onboard(args: &[String]) {
             if failed > 0 { format!(", {failed} failed") } else { String::new() }
         );
         println!("drafts: {}", dm.display());
+        println!(
+            "\nNext → review {} and DELETE any junk drafts from {} (commit reads the reviewed JSON), then store the keepers:\n  mem onboard {} --commit",
+            dm.display(),
+            dj.display(),
+            repo.display()
+        );
     }
 
     // commit: kept drafts (from the REVIEWED drafts.json — delete bad lines first) become
@@ -1164,6 +1572,11 @@ fn cmd_onboard(args: &[String]) {
             }
         }
         println!("committed {written} onboarded belief(s) into scope={scope} ({skipped} already present)");
+        if written > 0 {
+            println!(
+                "\nNext → use them:  mem recall \"<topic>\"   ·   mem debt   (known-debt)   ·   mem consolidate   (link them into the graph)"
+            );
+        }
     }
 }
 
@@ -1195,6 +1608,16 @@ fn onboard_belief_md(id: &str, scope: &str, d: &memory_onboard::Draft, model: &s
         "confidence:\n  directness: inferred\n  observation_count: 1\n  source_weight: 0.5\n  asserted: {:.2}\n",
         d.asserted
     ));
+    // TIER-2 deficiency envelope (§3b): emitted only for debt drafts that yielded a forcing
+    // constraint. Orthogonal to confidence — this belief is true AND a known compromise.
+    if !d.def_forcing.is_empty() {
+        let sev = if d.def_severity.is_empty() { "medium" } else { &d.def_severity };
+        fm.push_str(&format!("deficiency:\n  severity: {sev}\n  forcing_constraint: {}\n", d.def_forcing.replace('\n', " ")));
+        match &d.def_revisit {
+            Some(rw) => fm.push_str(&format!("  revisit_when: {}\n", rw.replace('\n', " "))),
+            None => fm.push_str("  revisit_when: null\n"),
+        }
+    }
     fm.push_str("edges: []\ncoord: null\n---\n\n");
     fm.push_str(&format!("{}\n\nLead: {} ({})\n", d.why, d.lead.title, d.lead.date));
     if !d.lead.evidence.is_empty() {
@@ -1563,45 +1986,29 @@ mod tests {
     }
 
     #[test]
-    fn incoming_supports_counts_only_incoming_supports() {
-        let rels = vec![
-            rel("supports", "S1", "A"),   // incoming support → counts
-            rel("supports", "S2", "A"),   // incoming support → counts
-            rel("supports", "A", "X"),    // OUTGOING support → does not count
-            rel("refines", "R", "A"),     // wrong kind → does not count
-            rel("attacks", "K", "A"),     // wrong kind → does not count
-        ];
-        assert_eq!(incoming_supports("A", &rels), 2);
-        assert_eq!(incoming_supports("X", &[rel("supports", "A", "X")]), 1);
+    fn confidence_boost_is_monotone_and_capped() {
+        // factor grows with structural weight, bounded in [1.0, 1.12].
+        let b0 = confidence_boost(0.0);
+        let bmid = confidence_boost(0.5);
+        let bmax = confidence_boost(1.0);
+        assert_eq!(b0, 1.0, "zero-confidence → no boost");
+        assert!(bmid > b0 && bmax > bmid, "higher confidence ⇒ higher boost");
+        assert!(bmax <= 1.12 + 1e-6, "boost is capped at ≤12%");
+        assert_eq!(confidence_boost(5.0), bmax, "weight is clamped to 1.0");
     }
 
     #[test]
-    fn more_incoming_supports_yields_higher_boost() {
-        // monotone non-decreasing, strictly higher for more corroboration, and capped+saturating
-        let b0 = support_boost(0);
-        let b1 = support_boost(1);
-        let b2 = support_boost(2);
-        let b5 = support_boost(5);
-        assert_eq!(b0, 1.0, "no supporters → no boost");
-        assert!(b1 > b0 && b2 > b1 && b5 > b2, "more supporters ⇒ strictly higher boost");
-        // capped: never more than ~12% even with absurd corroboration
-        assert!(support_boost(10_000) <= 1.12 + 1e-6, "boost is capped");
-        // saturating: the first supporter buys more than the gap from 4→5
-        assert!((b1 - b0) > (support_boost(5) - support_boost(4)), "boost saturates");
-    }
+    fn nearer_hit_still_outranks_far_but_confident_one() {
+        // A clearly-nearer belief (cosine 0.80, low confidence) must beat a far one (0.62) even when
+        // the far one is maximally confident — similarity stays dominant.
+        let near = 0.80f32 * confidence_boost(0.0);
+        let far_confident = 0.62f32 * confidence_boost(1.0);
+        assert!(near > far_confident, "boost must not let a far belief leapfrog a clearly nearer one");
 
-    #[test]
-    fn nearer_hit_still_outranks_far_but_supported_one() {
-        // A clearly-nearer belief (cosine 0.80, no support) must beat a far one (0.62) even when
-        // the far one is heavily corroborated — similarity stays dominant.
-        let near = 0.80f32 * support_boost(0);
-        let far_supported = 0.62f32 * support_boost(50);
-        assert!(near > far_supported, "boost must not let a far belief leapfrog a clearly nearer one");
-
-        // But it DOES break a near-tie: 0.70 with 3 supporters beats a bare 0.70.
-        let tie_a = 0.70f32 * support_boost(3);
-        let tie_b = 0.70f32 * support_boost(0);
-        assert!(tie_a > tie_b, "corroboration breaks a near-tie");
+        // But it DOES break a near-tie: 0.70 high-confidence beats a bare 0.70 low-confidence.
+        let tie_a = 0.70f32 * confidence_boost(0.9);
+        let tie_b = 0.70f32 * confidence_boost(0.1);
+        assert!(tie_a > tie_b, "confidence breaks a near-tie");
     }
 
     #[test]

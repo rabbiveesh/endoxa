@@ -18,7 +18,7 @@ where a static doc wins. Instead it automates the corpus-authoring playbook
 |---|---|---|---|
 | 0 | deterministic, git-only | leads: reverts/reinstatements, rationale commits, aged debt comments, doc pointers | **shipped** |
 | 1 | cheap local model | turn leads into crisp claim drafts (shipped: `--escalate N`); doc-vs-code contradiction probes; weak-model confident-and-wrong harvest (pre-defeated inoculation beliefs) | **partly shipped** |
-| 2 | frontier agent | design-rationale extraction over tier-0/1 leads ("why X over Y"), verdict structuring, kludge → Deficiency beliefs | design |
+| 2 | frontier/strong model | kludge → **Deficiency beliefs** (shipped: `--escalate N --tier2`, model via `TIER2_MODEL`); design-rationale extraction, verdict structuring | **kludge→deficiency shipped** |
 | 3 | the human | guided interview seeded by tier-0–2 findings ("this HACK survived 4.2y — why?"); the only source of head-only knowledge | design |
 
 Tier 3 doubles as the human-contribution UX (design-doc HOLE): humans are bad at
