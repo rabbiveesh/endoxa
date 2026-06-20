@@ -392,11 +392,19 @@ Default to none unless the relation is clear. Reply ONLY with JSON shaped like \
 {\"relation\":\"none\",\"confidence\":\"plausible\",\"rationale\":\"<one short sentence>\"} \
 where confidence is weak, plausible, or strong.";
 
-/// Adversarial second pass for proposed supersedes (high stakes — it drops a belief).
+/// Adversarial second pass for proposed supersedes (high stakes — it drops a belief). Also
+/// extracts the CARRY-OVER: the load-bearing detail B states that A omits, which would otherwise
+/// be lost once B is hidden behind the supersede. The carry-over rides the edge body so `mem
+/// expand` shows it next to the winner — the displaced point survives without un-defeating B.
 const VERIFY_SYSTEM: &str = "You verify whether belief B is made OBSOLETE by belief A. Answer \
 outdated=true ONLY if A states an updated value for the SAME thing B is about, making B wrong \
-to show now. If they are about different aspects, or both are still true, answer false. Reply \
-JSON {\"outdated\": true|false}";
+to show now. If they are about different aspects, or both are still true, answer false. When \
+outdated=true, also extract carry_over: the specific load-bearing detail B states that A does NOT \
+contain — the concrete mechanism, value, reason, or step (e.g. WHAT was done or WHY it worked), \
+quoted from B's own words. Do NOT return a title, label, or status phrase like \"step 1\" or \
+\"confirmed working\"; return the substance it refers to. Use an empty string only if A already \
+carries every concrete detail B has. Reply JSON {\"outdated\": true|false, \"carry_over\": \"<the \
+concrete detail, or empty>\"}";
 
 /// Adversarial pass for proposed attacks. A false conflict flag is noise, so the judge must
 /// clear a pointed second call before we record a contradiction; otherwise we downgrade to a
@@ -492,15 +500,24 @@ impl Linker for JudgmentLinker {
             }
             // Adversarial verify: a second pointed call must agree B is now obsolete. Catches
             // the over-eager "same topic, different aspect" supersessions the single judgment misses.
+            let mut carry_over = String::new();
             if matches!(kind, EdgeKind::Supersedes) {
                 let vu = format!("A: {}\nB: {}", ctx.new.claim, b.claim);
-                let outdated = memory_embed::chat_json(&self.url, &self.model, VERIFY_SYSTEM, &vu)
-                    .ok()
+                let verdict = memory_embed::chat_json(&self.url, &self.model, VERIFY_SYSTEM, &vu).ok();
+                let outdated = verdict
+                    .as_ref()
                     .and_then(|x| x.get("outdated").and_then(|o| o.as_bool()))
                     .unwrap_or(false);
                 if !outdated {
                     continue; // verification rejected the supersession
                 }
+                // Capture the displaced detail so the winner's edge carries it (see VERIFY_SYSTEM).
+                carry_over = verdict
+                    .as_ref()
+                    .and_then(|x| x.get("carry_over").and_then(|o| o.as_str()))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
             }
             // Adversarial verify for attacks: a false "conflict" is noise. A second pointed call
             // must agree A genuinely claims B is WRONG; otherwise DOWNGRADE to a non-defeating
@@ -541,10 +558,14 @@ impl Linker for JudgmentLinker {
                 }
             }
             let rationale = v.get("rationale").and_then(|x| x.as_str()).unwrap_or("");
-            let rationale = match downgrade_to {
+            let mut rationale = match downgrade_to {
                 Some(why) => format!("judge: downgraded {judged}→{} ({why}): {rationale}", kind.as_str()),
                 None => format!("judge: {rationale}"),
             };
+            // Fold the displaced detail onto the supersede edge so the winner carries it forward.
+            if !carry_over.is_empty() {
+                rationale.push_str(&format!("\ncarries: {carry_over}"));
+            }
             out.push(LinkProposal {
                 kind,
                 subject: ctx.new.id.clone(),

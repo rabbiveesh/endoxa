@@ -188,24 +188,27 @@ pub struct Belief {
     /// Known-debt envelope (§3b), present iff this belief records a compromise. Orthogonal to
     /// confidence: a deficient belief is still true and current — it just should change.
     pub deficiency: Option<Deficiency>,
+    /// Free-text markdown body (everything after the frontmatter). For a reified edge-belief this
+    /// is the Linker's rationale / carry-over note; for a content belief it's the `--body` detail.
+    /// Empty when absent. Surfaced by `mem expand` so a defeating edge can carry the displaced point.
+    pub body: String,
 }
 
 impl Belief {
     /// Parse one belief markdown file (YAML-ish frontmatter). Hand-rolled, zero-dep.
     pub fn parse(text: &str) -> Option<Belief> {
         let mut fm: Vec<&str> = Vec::new();
-        let mut started = false;
+        let mut body_lines: Vec<&str> = Vec::new();
+        let mut state = 0u8; // 0 = before frontmatter, 1 = inside frontmatter, 2 = body
         for line in text.lines() {
-            if line.trim_end() == "---" {
-                if !started {
-                    started = true;
-                } else {
-                    break;
-                }
+            if state < 2 && line.trim_end() == "---" {
+                state += 1;
                 continue;
             }
-            if started {
-                fm.push(line);
+            match state {
+                1 => fm.push(line),
+                2 => body_lines.push(line),
+                _ => {}
             }
         }
         if fm.is_empty() {
@@ -324,6 +327,7 @@ impl Belief {
         if b.id.is_empty() {
             return None;
         }
+        b.body = body_lines.join("\n").trim().to_string();
         if let (Some(kind), false, false) = (rel_kind, rel_subj.is_empty(), rel_obj.is_empty()) {
             b.relation = Some(Relation { kind, subject: rel_subj, object: rel_obj });
         }
@@ -718,6 +722,29 @@ edges: []\n---\n\nbody\n";
         // an ordinary belief has none
         let plain = Belief::parse("---\nid: b_x\nslug: x\nclaim:\n  kind: text\n  text: >-\n    plain\n---\n").unwrap();
         assert!(plain.deficiency.is_none());
+    }
+
+    #[test]
+    fn parses_the_markdown_body() {
+        // a content belief's body (the `--body` detail) is captured, trimmed of edge whitespace
+        let b = Belief::parse(
+            "---\nid: b_x\nslug: x\nclaim:\n  kind: text\n  text: >-\n    claim\n---\n\nthe detail\n",
+        )
+        .unwrap();
+        assert_eq!(b.body, "the detail");
+        // no body → empty (not whitespace)
+        let none = Belief::parse("---\nid: b_y\nslug: y\nclaim:\n  kind: text\n  text: >-\n    c\n---\n").unwrap();
+        assert_eq!(none.body, "");
+        // a reified edge-belief carries the Linker's rationale as its body — this is what
+        // `mem expand` surfaces so a defeating edge can carry the displaced point forward
+        let edge = Belief::parse(
+            "---\nid: b_e\nslug: rel-e\nclaim:\n  kind: text\n  text: >-\n    [b_a] supersedes [b_b]\n\
+relation:\n  kind: supersedes\n  subject: b_a\n  object: b_b\n---\n\n\
+judge: A restates B\ncarries: the load-bearing mechanism\n",
+        )
+        .unwrap();
+        assert!(edge.relation.is_some());
+        assert_eq!(edge.body, "judge: A restates B\ncarries: the load-bearing mechanism");
     }
 
     #[test]

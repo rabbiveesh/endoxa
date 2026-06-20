@@ -382,6 +382,15 @@ fn cmd_expand(args: &[String]) {
         };
         let mark = if defeated.contains(&nb.id) { "  [superseded]" } else { "" };
         println!("  {label:>14}  [{}] {}{}", nb.slug, nb.claim, mark);
+        // Surface the reified edge's rationale/carry-over note (Linker authored it). This is where
+        // a defeating edge carries the displaced point, so an agent sees WHY without re-expanding
+        // the loser. The edge-belief id is deterministic from (kind, subject, object).
+        let edge_id = content_id(&format!("{}|{}|{}", r.kind.as_str(), r.subject, r.object));
+        if let Some(note) = sg.by_id(&edge_id).map(|e| e.body.trim()).filter(|s| !s.is_empty()) {
+            for (i, ln) in note.lines().enumerate() {
+                println!("                  {} {ln}", if i == 0 { "↳" } else { " " });
+            }
+        }
         printed += 1;
     }
     if printed == 0 {
