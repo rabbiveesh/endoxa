@@ -182,6 +182,10 @@ on something only a human can resolve, so the autonomous pass stops here. The fo
 
 ## Adjacent proposals (not verdict-driven)
 
+- **[salience-from-usefulness.md](salience-from-usefulness.md)** — parked: learn the L2 ranking blend
+  from downstream task-utility feedback (reified as a defeasible `useful_for` Annotate edge), strictly
+  downstream of `defeated()`. Stolen from Zhou's *"A Bitter Lesson for Memory."* Gated on having
+  task-outcome traces to learn from (same shape as the N5 data blocker).
 - **[lazy-background-work.md](lazy-background-work.md)** — daemon-less opportunistic consolidation:
   the CLI checks if a worker pass (`consolidate`/`dream`) is due and kicks it off detached, instead
   of an always-running daemon. Assessment + build spec. Fits the per-invocation / sleep-stage model;
