@@ -149,8 +149,11 @@ The shipped first cut follows the mechanism above with these deltas and decision
   write count, capped at `worker.max_targets`); `dream` piggybacks on a healthy pass at its own much
   longer cadence (`worker.dream_interval_mins`, default weekly, `--limit 4`); `reduce` stays manual.
 - **Budget cap (spec open question → DECIDED):** per-pass targets = `min(pending_writes,
-  max_targets)` — a big onboard import consolidates a chunk per pass and catches up across passes,
-  never a marathon.
+  max_targets)` — never a marathon. A capped pass does NOT catch up across passes (selection is
+  newest-first with no cursor; re-running would re-judge the same newest beliefs at real LLM cost),
+  so the run summary surfaces the tail explicitly: `capped at 12; cover the rest: mem consolidate
+  --limit 40`. The worker keeps the frontier fresh; going deep stays a deliberate command. A
+  consolidation cursor is the noted later refinement if this bites.
 - **Manual control surface (spec open question → DECIDED):** `mem worker` (status: pending count,
   last run, lock holder, due-now, log path) and `mem worker --now` (forced detached pass, still
   lock-serialized).

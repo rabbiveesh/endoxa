@@ -51,7 +51,9 @@ pub struct WorkerSettings {
     /// Dream piggybacks on a due consolidate at most this often (minutes). Default: weekly.
     pub dream_interval_mins: u64,
     /// Hard cap on beliefs consolidated per background pass (bounds LLM calls — a big onboard
-    /// import must not trigger a marathon; the rest catches up on later passes).
+    /// import must not trigger a marathon). The tail beyond the cap is NOT revisited by later
+    /// passes (selection is newest-first, no cursor); the run summary surfaces the
+    /// `mem consolidate --limit N` that covers it.
     pub max_targets: u64,
 }
 
@@ -162,8 +164,13 @@ fn lock_state(dir: &Path) -> Option<StateLock> {
                 let abandoned = std::fs::metadata(&path)
                     .ok()
                     .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.elapsed().ok())
-                    .map(|d| d.as_secs() >= 10)
+                    .map(|t| match t.elapsed() {
+                        Ok(d) => d.as_secs() >= 10,
+                        // future mtime (clock stepped back): a µs-hold lock can't legitimately be
+                        // from the future — steal it rather than paying the spin for hours. A
+                        // wrong steal only re-opens the accepted proceed-unlocked mode.
+                        Err(_) => true,
+                    })
                     .unwrap_or(false);
                 if abandoned {
                     let _ = std::fs::remove_file(&path);
@@ -397,6 +404,12 @@ pub fn run_worker() {
             let mut p = format!("consolidate: {n} belief(s) → {edges} new edge(s)");
             if review > 0 {
                 p.push_str(&format!(", ⚑{review} for review"));
+            }
+            // A capped pass leaves a tail the worker won't revisit (selection is newest-first,
+            // no cursor) — surface the deliberate command that covers the whole window instead
+            // of pretending later passes catch up.
+            if claimed > n as u64 {
+                p.push_str(&format!(" — capped at {n}; cover the rest: mem consolidate --limit {claimed}"));
             }
             parts.push(p);
         }
