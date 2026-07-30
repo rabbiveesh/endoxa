@@ -19,12 +19,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod worker;
+
 // --- settings (memory-cli ONLY; layered defaults < file < env via the `config` crate) ---
 
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 struct Settings {
     recall: RecallSettings,
+    worker: worker::WorkerSettings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,7 +45,7 @@ impl Default for RecallSettings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { recall: RecallSettings::default() }
+        Settings { recall: RecallSettings::default(), worker: worker::WorkerSettings::default() }
     }
 }
 
@@ -87,6 +90,8 @@ fn main() {
         Some("link") => cmd_link(&args[1..]),
         Some("debt") => cmd_debt(&args[1..]),
         Some("onboard") => cmd_onboard(&args[1..]),
+        Some("worker") => worker::cmd_worker(&args[1..]),
+        Some("__worker") => worker::run_worker(),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
             eprintln!("usage:");
@@ -103,6 +108,7 @@ fn main() {
             eprintln!("  mem link <subj> <kind> <obj> [--rationale R]  # author a durable edge (frontier/human adjudication)");
             eprintln!("  mem debt [<query>]            # list known-debt (deficiency) beliefs; ⚠ resurfaces when a blocked_on constraint lifts");
             eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--tier2] [--commit]  # lead harvest → claim drafts (+§3b debt envelope) → store");
+            eprintln!("  mem worker [--now]            # background maintenance: show status (--now forces a pass)");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -152,6 +158,9 @@ fn cmd_remember(args: &[String]) {
     let linked = consolidate(&dir, &id, &scope, &hints);
     let note = if linked > 0 { format!(" — Linker drew {linked} edge(s)") } else { String::new() };
     println!("remembered {id} [{slug}] in scope={scope}{note}");
+    // Lazy background work: writes are the intent signal. Count this one; if the sleep-stage
+    // threshold trips, kick a detached `mem __worker` (never blocks or breaks the foreground).
+    worker::note_writes_and_kick(&dir, 1);
 }
 
 fn cmd_recall(args: &[String]) {
@@ -175,6 +184,7 @@ fn cmd_recall(args: &[String]) {
     }
 
     let dir = store_dir();
+    worker::surface_last_run(&dir); // one-line "what the background did", at most once per run
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
         Ok(g) => g,
@@ -429,6 +439,7 @@ fn cmd_ask(args: &[String]) {
     }
 
     let dir = store_dir();
+    worker::surface_last_run(&dir); // one-line "what the background did", at most once per run
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
         Ok(g) => g,
@@ -764,6 +775,7 @@ fn cmd_promote(args: &[String]) {
         "promoted {promoted_content} belief(s) and {edges_drawn} edge(s) from {from_scope} into {canon_scope} \
          (originals kept; {dropped_edges} edge(s) dropped as unresolvable). Conflicts settle at recall — run `mem consolidate` to adjudicate."
     );
+    worker::note_writes_and_kick(&dir, promoted_content);
 }
 
 /// Like `belief_md`, but stamps `derived_from: [<origin>]` so a promoted canon belief points back
@@ -925,20 +937,38 @@ fn cmd_consolidate(args: &[String]) {
     }
     let dir = store_dir();
     let scopes = active_scopes();
-    let g = match Graph::load_dir(&dir) {
+    match consolidate_pass(&dir, &scopes, limit) {
+        Err(e) => eprintln!("{e}; can't run candidate generation"),
+        Ok((0, _, _)) => println!("Nothing to consolidate in scope ({}).", scopes.join(", ")),
+        Ok((n, total, n_review)) => {
+            println!("consolidated {n} belief(s); drew {total} new edge(s)");
+            // Frontier-review nudge: the judge emits supports/refines but can't safely tell a
+            // justification (depends_on) from corroboration — hand candidates to the frontier agent.
+            if n_review > 0 {
+                println!("⚑ {n_review} edge(s) flagged for frontier review — run `mem review` to adjudicate (candidate depends_on).");
+            }
+        }
+    }
+}
+
+/// The consolidation pass shared by `mem consolidate` and the background worker (`mem __worker`):
+/// ensure embeddings, run proximity + the LLM judge over the most recent `limit` in-scope beliefs,
+/// commit what they propose. `Ok((targets, new_edges, review_candidates))`; `Err` only on a hard
+/// failure (the embedding backend is down). Progress goes to stderr — the worker's log.
+fn consolidate_pass(dir: &PathBuf, scopes: &[String], limit: usize) -> Result<(usize, usize, usize), String> {
+    let g = match Graph::load_dir(dir) {
         Ok(g) => g,
-        Err(_) => { println!("No memories yet."); return; }
+        Err(_) => return Ok((0, 0, 0)),
     };
-    let sg = scoped_graph(&g, &scopes);
+    let sg = scoped_graph(&g, scopes);
     let content: Vec<&Belief> = sg.content().collect();
     if content.is_empty() {
-        println!("Nothing to consolidate in scope ({}).", scopes.join(", "));
-        return;
+        return Ok((0, 0, 0));
     }
 
     // make sure every in-scope content belief has an embedding (candidate generation needs it)
     let oll = memory_embed::Ollama::from_env();
-    let mut vectors = memory_embed::load_cache(&dir, &oll.model);
+    let mut vectors = memory_embed::load_cache(dir, &oll.model);
     let need: Vec<&Belief> = content.iter().copied().filter(|b| !vectors.contains_key(&b.id)).collect();
     if !need.is_empty() {
         let docs: Vec<String> = need.iter().map(|b| format!("search_document: {}", b.claim)).collect();
@@ -947,9 +977,9 @@ fn cmd_consolidate(args: &[String]) {
                 for (b, v) in need.iter().zip(vs) {
                     vectors.insert(b.id.clone(), v);
                 }
-                memory_embed::save_cache(&dir, &oll.model, &vectors);
+                memory_embed::save_cache(dir, &oll.model, &vectors);
             }
-            Err(e) => { eprintln!("embedding failed ({e}); can't run candidate generation"); return; }
+            Err(e) => return Err(format!("embedding failed ({e})")),
         }
     }
 
@@ -964,18 +994,17 @@ fn cmd_consolidate(args: &[String]) {
     for t in &targets {
         let ctx = LinkCtx { new: t, graph: &sg, vectors: &vectors, hints: &[] };
         let props = orch.run(&ctx, &[Cadence::Nrem, Cadence::Rem]);
-        total += Consolidator::commit(&dir, &props, belief_scope(t));
+        total += Consolidator::commit(dir, &props, belief_scope(t));
     }
-    println!("consolidated {} belief(s); drew {} new edge(s)", targets.len(), total);
-    // Frontier-review nudge: the judge emits supports/refines but can't safely tell a justification
-    // (depends_on) from corroboration — reload and surface any candidates for on-demand adjudication.
-    if let Ok(g2) = Graph::load_dir(&dir) {
-        let sg2 = scoped_graph(&g2, &scopes);
-        let n_review = depends_on_candidates(&sg2, &sg2.defeated()).len();
-        if n_review > 0 {
-            println!("⚑ {n_review} edge(s) flagged for frontier review — run `mem review` to adjudicate (candidate depends_on).");
+    // Reload to count depends_on candidates (the edges just drawn may have created some).
+    let n_review = match Graph::load_dir(dir) {
+        Ok(g2) => {
+            let sg2 = scoped_graph(&g2, scopes);
+            depends_on_candidates(&sg2, &sg2.defeated()).len()
         }
-    }
+        Err(_) => 0,
+    };
+    Ok((targets.len(), total, n_review))
 }
 
 /// `mem reduce [--dry-run]` — the deterministic duplicate-collapse pass. A SURFACING-stage HIDE,
@@ -1077,20 +1106,52 @@ fn cmd_dream(args: &[String]) {
     }
     let dir = store_dir();
     let scopes = active_scopes();
-    let g = match Graph::load_dir(&dir) {
+    match dream_pass(&dir, &scopes, limit) {
+        Err(e) => eprintln!("{e}; can't dream"),
+        Ok(o) if o.targets == 0 => println!("Need at least 2 beliefs in scope to dream."),
+        Ok(o) => {
+            let rate = if o.attempts > 0 { o.bridges as f32 / o.attempts as f32 * 100.0 } else { 0.0 };
+            println!("bridge rate: {rate:.1}% ({}/{} far pairs ever bridged)", o.bridges, o.attempts);
+            if o.drawn > 0 {
+                println!("\n{} new cross-domain bridge(s):", o.drawn);
+                for p in &o.props {
+                    println!("  • {}", p.rationale);
+                }
+            } else {
+                println!("no new bridges this pass ({} probe(s) recorded as earned-unrelated).", o.recorded);
+            }
+        }
+    }
+}
+
+/// What one dream pass did — the CLI prints the full report, the worker a one-line summary.
+struct DreamOutcome {
+    targets: usize,
+    drawn: usize,
+    recorded: usize,
+    attempts: u64,
+    bridges: u64,
+    props: Vec<LinkProposal>,
+}
+
+/// The REM/novelty pass shared by `mem dream` and the background worker: probe the most-unrelated
+/// pairs for bridges, persist every probe to the ledger, commit the rare bridges. `targets == 0`
+/// means there was nothing to dream over; `Err` only when the embedding backend is down.
+fn dream_pass(dir: &PathBuf, scopes: &[String], limit: usize) -> Result<DreamOutcome, String> {
+    let none = |targets| DreamOutcome { targets, drawn: 0, recorded: 0, attempts: 0, bridges: 0, props: Vec::new() };
+    let g = match Graph::load_dir(dir) {
         Ok(g) => g,
-        Err(_) => { println!("No memories yet."); return; }
+        Err(_) => return Ok(none(0)),
     };
-    let sg = scoped_graph(&g, &scopes);
+    let sg = scoped_graph(&g, scopes);
     let content: Vec<&Belief> = sg.content().collect();
     if content.len() < 2 {
-        println!("Need at least 2 beliefs in scope to dream.");
-        return;
+        return Ok(none(0));
     }
 
     // novelty needs an embedding for every in-scope belief (it's distance-driven).
     let oll = memory_embed::Ollama::from_env();
-    let mut vectors = memory_embed::load_cache(&dir, &oll.model);
+    let mut vectors = memory_embed::load_cache(dir, &oll.model);
     let need: Vec<&Belief> = content.iter().copied().filter(|b| !vectors.contains_key(&b.id)).collect();
     if !need.is_empty() {
         let docs: Vec<String> = need.iter().map(|b| format!("search_document: {}", b.claim)).collect();
@@ -1099,13 +1160,13 @@ fn cmd_dream(args: &[String]) {
                 for (b, v) in need.iter().zip(vs) {
                     vectors.insert(b.id.clone(), v);
                 }
-                memory_embed::save_cache(&dir, &oll.model, &vectors);
+                memory_embed::save_cache(dir, &oll.model, &vectors);
             }
-            Err(e) => { eprintln!("embedding failed ({e}); can't dream"); return; }
+            Err(e) => return Err(format!("embedding failed ({e})")),
         }
     }
 
-    let (probed, attempts0, bridges0) = load_probes(&dir);
+    let (probed, attempts0, bridges0) = load_probes(dir);
     // spread coverage: oldest beliefs first (newest get linked by NREM/REM consolidate already).
     let mut targets: Vec<&Belief> = content.clone();
     targets.sort_by(|a, b| a.txn_time.cmp(&b.txn_time));
@@ -1114,21 +1175,11 @@ fn cmd_dream(args: &[String]) {
     eprintln!("dreaming over {} belief(s) ...", targets.len());
     let dreamer = NoveltyDreamer::from_env();
     let (props, records) = dreamer.dream(&targets, &sg, &vectors, &probed);
-    append_probes(&dir, &records);
+    append_probes(dir, &records);
     let attempts = attempts0 + records.len() as u64;
     let bridges = bridges0 + records.iter().filter(|r| r.bridged).count() as u64;
-    let drawn = Consolidator::commit(&dir, &props, &write_scope(false));
-
-    let rate = if attempts > 0 { bridges as f32 / attempts as f32 * 100.0 } else { 0.0 };
-    println!("bridge rate: {rate:.1}% ({bridges}/{attempts} far pairs ever bridged)");
-    if drawn > 0 {
-        println!("\n{drawn} new cross-domain bridge(s):");
-        for p in &props {
-            println!("  • {}", p.rationale);
-        }
-    } else {
-        println!("no new bridges this pass ({} probe(s) recorded as earned-unrelated).", records.len());
-    }
+    let drawn = Consolidator::commit(dir, &props, &write_scope(false));
+    Ok(DreamOutcome { targets: targets.len(), drawn, recorded: records.len(), attempts, bridges, props })
 }
 
 /// A candidate justification the cheap judge couldn't safely adjudicate: an in-force
@@ -1577,6 +1628,7 @@ fn cmd_onboard(args: &[String]) {
                 "\nNext → use them:  mem recall \"<topic>\"   ·   mem debt   (known-debt)   ·   mem consolidate   (link them into the graph)"
             );
         }
+        worker::note_writes_and_kick(&dir, written);
     }
 }
 
