@@ -94,7 +94,7 @@ fn main() {
         Some("debt") => cmd_debt(&args[1..]),
         Some("onboard") => cmd_onboard(&args[1..]),
         Some("worker") => worker::cmd_worker(&args[1..]),
-        Some("__worker") => worker::run_worker(),
+        Some("__worker") => worker::run_worker(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
             eprintln!("usage:");
@@ -104,7 +104,7 @@ fn main() {
             eprintln!("  mem ask \"<question>\" [--limit N]  # LLM-synthesized grounded answer (opt-in)");
             eprintln!("  mem forget <slug|id> [--reason R]  # retract a belief: recall drops it (file kept)");
             eprintln!("  mem promote [<branch>] [--dry-run]  # lift a merged branch's beliefs into repo canon");
-            eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
+            eprintln!("  mem consolidate [--limit N] [--fg]  # run the LLM judge over recent beliefs (detached by default; --fg = inline)");
             eprintln!("  mem reduce [--dry-run]        # collapse duplicate beliefs: recall folds them behind one rep");
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
             eprintln!("  mem review [--limit N]        # list edges flagged for frontier review (candidate depends_on)");
@@ -926,21 +926,73 @@ fn consolidate(dir: &PathBuf, new_id: &str, scope: &str, hints: &[Hint]) -> usiz
     Consolidator::commit(dir, &proposals, scope)
 }
 
-/// `mem consolidate [--limit N]` — the REM pass: embed in-scope beliefs, run proximity + the
-/// LLM judge over the most recent N, and commit the edges they propose.
+/// `mem consolidate [--limit N] [--fg]` — the deliberate REM pass: embed in-scope beliefs, run
+/// proximity + the LLM judge over the most recent N, commit the edges they propose. DETACHES by
+/// default (minutes of LLM work on CPU shouldn't hold the terminal): the pass runs as the same
+/// locked/instrumented background job as the worker tier, and the result surfaces on the next
+/// `recall`/`ask`. `--fg` (or a disabled background tier) keeps the synchronous inline path.
 fn cmd_consolidate(args: &[String]) {
     let mut limit = 12usize;
+    let mut fg = false;
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--limit" {
-            limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(12);
-            i += 1;
+        match args[i].as_str() {
+            "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(12); i += 1; }
+            "--fg" => fg = true,
+            _ => {}
         }
         i += 1;
     }
     let dir = store_dir();
     let scopes = active_scopes();
-    match consolidate_pass(&dir, &scopes, limit) {
+
+    if !fg && worker::background_allowed() {
+        match worker::spawn_consolidate(&dir, limit) {
+            Ok(()) => {
+                println!(
+                    "consolidating up to {limit} belief(s) in the background — the result surfaces on your next `mem recall`/`mem ask`."
+                );
+                println!(
+                    "watch live:  tail -f {}   ·   run inline instead:  mem consolidate --fg",
+                    dir.join(".worker.log").display()
+                );
+                return;
+            }
+            Err(e) => eprintln!("(couldn't detach: {e}; running inline)"),
+        }
+    }
+
+    // Inline path — same bookkeeping as a background run: metered into the ledger, and the
+    // pending-write backlog this pass covers is drained so the worker tier doesn't redo it.
+    let claimed = worker::pending_writes(&dir);
+    let mut metric = worker::Metric {
+        job: "consolidate".into(),
+        trigger: "cli-fg".into(),
+        scopes: scopes.join("+"),
+        pending: claimed,
+        ok: true,
+        ..worker::Metric::default()
+    };
+    let meter = worker::Meter::start();
+    let result = consolidate_pass(&dir, &scopes, limit);
+    let mut did_work = false;
+    match &result {
+        Err(e) => {
+            metric.ok = false;
+            metric.error = e.clone();
+        }
+        Ok((n, total, n_review)) => {
+            did_work = *n > 0;
+            metric.targets = *n as u64;
+            metric.new_edges = *total as u64;
+            metric.review = *n_review as u64;
+        }
+    }
+    meter.finish(&mut metric);
+    worker::append_metric(&dir, &metric);
+    worker::finish_foreground_pass(&dir, claimed, did_work);
+
+    match result {
         Err(e) => eprintln!("{e}; can't run candidate generation"),
         // 0 targets with a real limit = empty scope; `--limit 0` falls through to the normal
         // report (0 consolidated + the review nudge), as before the pass extraction.
@@ -1111,7 +1163,33 @@ fn cmd_dream(args: &[String]) {
     }
     let dir = store_dir();
     let scopes = active_scopes();
-    match dream_pass(&dir, &scopes, limit) {
+    // Metered like every other pass; a deliberate dream also resets the worker's weekly cadence.
+    let mut metric = worker::Metric {
+        job: "dream".into(),
+        trigger: "cli-fg".into(),
+        scopes: scopes.join("+"),
+        ok: true,
+        ..worker::Metric::default()
+    };
+    let meter = worker::Meter::start();
+    let result = dream_pass(&dir, &scopes, limit);
+    match &result {
+        Err(e) => {
+            metric.ok = false;
+            metric.error = e.clone();
+        }
+        Ok(o) => {
+            metric.targets = o.targets as u64;
+            metric.probes = o.recorded as u64;
+            metric.bridges = o.drawn as u64;
+        }
+    }
+    meter.finish(&mut metric);
+    worker::append_metric(&dir, &metric);
+    if matches!(&result, Ok(o) if o.targets > 0) {
+        worker::note_foreground_dream(&dir);
+    }
+    match result {
         Err(e) => eprintln!("{e}; can't dream"),
         // 0 targets with a real limit = too few beliefs; `--limit 0` still reports the rate.
         Ok(o) if o.targets == 0 && limit > 0 => println!("Need at least 2 beliefs in scope to dream."),

@@ -181,3 +181,25 @@ The shipped first cut follows the mechanism above with these deltas and decision
 - **Not built (yet):** the "don't kick when the foreground command itself uses the LLM" refinement
   (risk №1) — moot today because none of the WRITE commands that kick are LLM-on-read, and the lock
   already serializes workers; revisit if `ask` ever becomes a trigger point.
+
+## Instrumentation (2026-07-30, second cut)
+
+Every pass — background or foreground — is now **measured**, and deliberate consolidation is
+**backgrounded by default**:
+
+- **Metrics ledger** `$MEMORY_DIR/.worker-metrics.jsonl`: one append-only JSON line per pass with
+  what happened (`job`, `trigger`, `scopes`, `pending`, `targets`, `new_edges`, `review`, `probes`,
+  `bridges`, `ok`, `error`) and what it cost (`duration_ms`, `chat_calls`, `chat_ms`,
+  `embed_texts`). Costs come from process-local atomic counters in `memory-embed` — the single
+  choke point every LLM touch flows through — snapshotted before/after each pass (attempts count
+  even on failure). Disposable sidecar, never read on a hot path; `mem worker` prints lifetime
+  totals per job + the recent tail, deeper analysis is jq territory.
+- **`trigger` distinguishes the three paths:** `worker` (due-check kick), `cli` (detached
+  `mem consolidate`), `cli-fg` (inline `--fg` runs and `mem dream`).
+- **`mem consolidate` detaches by default**: it re-execs the same hidden `__worker` body with the
+  caller's `--limit` (no dream piggyback), so a deliberate deep pass gets the identical lock,
+  log, state-drain, surfacing, and metrics treatment. `--fg` (or a disabled tier: MEM_NO_BG /
+  `worker.enabled=false`) keeps the old synchronous path — CI/scripts stay predictable — and the
+  inline path still records its metric and drains the backlog it covered.
+- **`mem dream` stays foreground** (it's an observability artifact that prints its bridge rate)
+  but is metered, and a deliberate dream resets the worker's weekly piggyback cadence.

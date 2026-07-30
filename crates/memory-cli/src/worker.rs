@@ -20,6 +20,7 @@ const STATE_FILE: &str = ".worker-state.json";
 const STATE_LOCK_FILE: &str = ".worker-state.lock";
 const LOCK_FILE: &str = ".worker.lock";
 const LOG_FILE: &str = ".worker.log";
+const METRICS_FILE: &str = ".worker-metrics.jsonl";
 
 /// Rotate `.worker.log` once it grows past this (one old generation kept).
 const LOG_ROTATE_BYTES: u64 = 1_000_000;
@@ -208,6 +209,153 @@ fn unsurfaced(s: &WorkerState) -> bool {
     s.summary_at > s.surfaced_at && !s.last_summary.is_empty()
 }
 
+// --- metrics ledger (one JSONL line per pass — the measurement substrate) ---------------
+//
+// Every consolidate/dream pass, background OR foreground, appends what it did and what it cost:
+// wall time and the LLM traffic delta (chat calls + wall, embed texts) from `memory-embed`'s
+// process-local counters. Append-only sidecar, disposable, never parsed on any hot path —
+// `mem worker` shows totals + the recent tail; deeper analysis is jq territory.
+
+/// One completed pass, as persisted to `.worker-metrics.jsonl`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Metric {
+    pub at: String,
+    /// "consolidate" | "dream"
+    pub job: String,
+    /// "worker" (due-check kick) | "cli" (detached `mem consolidate`) | "cli-fg" (inline command)
+    pub trigger: String,
+    pub scopes: String,
+    /// Pending-write backlog the pass saw when it started (0 for reads like a manual dream).
+    pub pending: u64,
+    pub targets: u64,
+    pub new_edges: u64,
+    pub review: u64,
+    pub probes: u64,
+    pub bridges: u64,
+    pub chat_calls: u64,
+    pub chat_ms: u64,
+    pub embed_texts: u64,
+    pub duration_ms: u64,
+    pub ok: bool,
+    pub error: String,
+}
+
+/// Meter a pass: wall-clock + the LLM-counter delta between `start` and `finish`.
+pub struct Meter {
+    t0: std::time::Instant,
+    c0: memory_embed::LlmCounters,
+}
+
+impl Meter {
+    pub fn start() -> Meter {
+        Meter { t0: std::time::Instant::now(), c0: memory_embed::counters() }
+    }
+
+    /// Fill the cost fields of `m` from this meter (leaves the what-happened fields alone).
+    pub fn finish(self, m: &mut Metric) {
+        let d = memory_embed::counters().delta(&self.c0);
+        m.chat_calls = d.chat_calls;
+        m.chat_ms = d.chat_ms;
+        m.embed_texts = d.embed_texts;
+        m.duration_ms = self.t0.elapsed().as_millis() as u64;
+        m.at = memory_core::iso_now();
+    }
+}
+
+fn metric_json(m: &Metric) -> String {
+    format!(
+        "{{\"at\":\"{}\",\"job\":\"{}\",\"trigger\":\"{}\",\"scopes\":\"{}\",\"pending\":{},\"targets\":{},\"new_edges\":{},\"review\":{},\"probes\":{},\"bridges\":{},\"chat_calls\":{},\"chat_ms\":{},\"embed_texts\":{},\"duration_ms\":{},\"ok\":{},\"error\":\"{}\"}}\n",
+        sanitize(&m.at), sanitize(&m.job), sanitize(&m.trigger), sanitize(&m.scopes),
+        m.pending, m.targets, m.new_edges, m.review, m.probes, m.bridges,
+        m.chat_calls, m.chat_ms, m.embed_texts, m.duration_ms, m.ok, sanitize(&m.error)
+    )
+}
+
+fn parse_metric(line: &str) -> Option<Metric> {
+    Some(Metric {
+        at: crate::jget(line, "\"at\":\"")?,
+        job: crate::jget(line, "\"job\":\"")?,
+        trigger: crate::jget(line, "\"trigger\":\"").unwrap_or_default(),
+        scopes: crate::jget(line, "\"scopes\":\"").unwrap_or_default(),
+        pending: jget_u64(line, "\"pending\":").unwrap_or(0),
+        targets: jget_u64(line, "\"targets\":").unwrap_or(0),
+        new_edges: jget_u64(line, "\"new_edges\":").unwrap_or(0),
+        review: jget_u64(line, "\"review\":").unwrap_or(0),
+        probes: jget_u64(line, "\"probes\":").unwrap_or(0),
+        bridges: jget_u64(line, "\"bridges\":").unwrap_or(0),
+        chat_calls: jget_u64(line, "\"chat_calls\":").unwrap_or(0),
+        chat_ms: jget_u64(line, "\"chat_ms\":").unwrap_or(0),
+        embed_texts: jget_u64(line, "\"embed_texts\":").unwrap_or(0),
+        duration_ms: jget_u64(line, "\"duration_ms\":").unwrap_or(0),
+        ok: line.contains("\"ok\":true"),
+        error: crate::jget(line, "\"error\":\"").unwrap_or_default(),
+    })
+}
+
+pub fn append_metric(dir: &Path, m: &Metric) {
+    use std::io::Write as _;
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join(METRICS_FILE)) {
+        let _ = f.write_all(metric_json(m).as_bytes());
+    }
+}
+
+fn load_metrics(dir: &Path) -> Vec<Metric> {
+    std::fs::read_to_string(dir.join(METRICS_FILE))
+        .map(|text| text.lines().filter_map(parse_metric).collect())
+        .unwrap_or_default()
+}
+
+/// Human duration for metric readouts (ms-resolution jobs, coarse display).
+fn dur(ms: u64) -> String {
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else if ms < 120_000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else {
+        format!("{}m{}s", ms / 60_000, (ms % 60_000) / 1000)
+    }
+}
+
+/// The `mem worker` metrics block: lifetime totals per job + the most recent passes. Empty
+/// string when nothing has been recorded yet.
+fn metrics_block(dir: &Path, recent: usize) -> String {
+    let all = load_metrics(dir);
+    if all.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    let totals = |job: &str| {
+        let runs: Vec<&Metric> = all.iter().filter(|m| m.job == job).collect();
+        if runs.is_empty() {
+            return None;
+        }
+        let failed = runs.iter().filter(|m| !m.ok).count();
+        let wall: u64 = runs.iter().map(|m| m.duration_ms).sum();
+        let chat: u64 = runs.iter().map(|m| m.chat_calls).sum();
+        let edges: u64 = runs.iter().map(|m| m.new_edges + m.bridges).sum();
+        let fail_note = if failed > 0 { format!(", {failed} failed") } else { String::new() };
+        Some(format!("{job} ×{} (Σ {} wall, {chat} chat, {edges} edge(s){fail_note})", runs.len(), dur(wall)))
+    };
+    let parts: Vec<String> = ["consolidate", "dream"].iter().filter_map(|j| totals(j)).collect();
+    out.push_str(&format!("metrics: {}\n", parts.join(" · ")));
+    for m in all.iter().rev().take(recent) {
+        let what = if m.ok {
+            match m.job.as_str() {
+                "dream" => format!("{} probe(s) → {} bridge(s)", m.probes, m.bridges),
+                _ => format!("{} target(s) → {} edge(s)", m.targets, m.new_edges),
+            }
+        } else {
+            format!("FAILED: {}", m.error)
+        };
+        out.push_str(&format!(
+            "  • {} {}[{}] {what} · {} · {} chat ({})\n",
+            m.at, m.job, m.trigger, dur(m.duration_ms), m.chat_calls, dur(m.chat_ms)
+        ));
+    }
+    out.push_str(&format!("  full ledger: {}\n", dir.join(METRICS_FILE).display()));
+    out
+}
+
 // --- foreground hooks -------------------------------------------------------------------
 
 /// Count `n` fresh store writes and, if the sleep-stage threshold trips, kick a detached worker.
@@ -235,6 +383,32 @@ pub fn note_writes_and_kick(dir: &Path, n: usize) {
     if worker_allowed(&w) && consolidate_due(&s, &w, epoch_now()) {
         let _ = spawn_detached(dir);
     }
+}
+
+/// Pending-write backlog right now (what a foreground pass is about to cover).
+pub fn pending_writes(dir: &Path) -> u64 {
+    load_state(dir).writes_since
+}
+
+/// A foreground `mem consolidate --fg` finished: same state bookkeeping as a worker run (drain
+/// the claimed backlog when work happened, advance `last_run` so the due-check doesn't redo it)
+/// minus the summary — the user already saw the output inline.
+pub fn finish_foreground_pass(dir: &Path, claimed: u64, did_work: bool) {
+    let _guard = lock_state(dir);
+    let mut s = load_state(dir);
+    if did_work {
+        s.writes_since = s.writes_since.saturating_sub(claimed);
+    }
+    s.last_run = epoch_now();
+    save_state(dir, &s);
+}
+
+/// A deliberate `mem dream` visited the store — reset the worker's weekly piggyback cadence.
+pub fn note_foreground_dream(dir: &Path) {
+    let _guard = lock_state(dir);
+    let mut s = load_state(dir);
+    s.last_dream = epoch_now();
+    save_state(dir, &s);
 }
 
 /// Print the one-line "what the background did" (at the top of `recall`/`ask`) — each summary
@@ -272,6 +446,23 @@ fn ago(secs: u64) -> String {
 /// Cwd is inherited ON PURPOSE: the worker derives the SAME active scope as the invocation that
 /// triggered it ("the trigger is the user already being in the right place").
 fn spawn_detached(dir: &Path) -> Result<(), String> {
+    spawn_detached_args(dir, &[])
+}
+
+/// Detach a deliberate consolidation (`mem consolidate` without `--fg`): same lock, log, state
+/// drain, surfacing, and metrics as a due-check kick, but with the caller's explicit limit and
+/// no dream piggyback.
+pub fn spawn_consolidate(dir: &Path, limit: usize) -> Result<(), String> {
+    spawn_detached_args(dir, &["--limit", &limit.to_string(), "--cli"])
+}
+
+/// Is the background tier available (config on, no `MEM_NO_BG`)? Callers that would detach fall
+/// back to their foreground path when it isn't — CI and script behavior stays predictable.
+pub fn background_allowed() -> bool {
+    worker_allowed(&crate::load_settings().worker)
+}
+
+fn spawn_detached_args(dir: &Path, extra: &[&str]) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let log_path = dir.join(LOG_FILE);
     // Bounded log: rotate once, keep one old generation. A racing worker's open fd follows the
@@ -287,6 +478,7 @@ fn spawn_detached(dir: &Path) -> Result<(), String> {
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("__worker")
+        .args(extra)
         .stdin(std::process::Stdio::null())
         .stdout(log)
         .stderr(log_err);
@@ -371,12 +563,33 @@ fn pid_alive(_pid: u32) -> bool {
 
 // --- the worker itself (`mem __worker`, hidden) -----------------------------------------
 
+/// Args of the hidden `mem __worker [--limit N] [--cli]`: an explicit limit + the cli marker
+/// mean "a detached deliberate `mem consolidate`" (caller's limit, no dream piggyback); bare
+/// means a due-check kick (backlog-derived limit, dream piggybacks).
+fn parse_worker_args(args: &[String]) -> (Option<usize>, bool) {
+    let mut limit = None;
+    let mut cli = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()); i += 1; }
+            "--cli" => cli = true,
+            _ => {}
+        }
+        i += 1;
+    }
+    (limit, cli)
+}
+
 /// The detached body: lock, snapshot the pending-write count, run the due passes, then update
 /// state. The claimed writes are DRAINED only when the pass actually consolidated something —
 /// a failed pass (backend down) or an empty-scope pass keeps the backlog pending so it retries /
 /// catches up later; `last_run` still advances, so the min-interval throttles those retries.
-/// Only a KILLED run leaves state fully untouched and re-triggers immediately.
-pub fn run_worker() {
+/// Only a KILLED run leaves state fully untouched and re-triggers immediately. Every pass
+/// appends a line to the metrics ledger.
+pub fn run_worker(args: &[String]) {
+    let (limit_override, cli) = parse_worker_args(args);
+    let trigger = if cli { "cli" } else { "worker" };
     let dir = crate::store_dir();
     let w = crate::load_settings().worker;
     let Some(_lock) = WorkerLock::try_acquire(&dir) else {
@@ -388,19 +601,31 @@ pub fn run_worker() {
     let claimed = state.writes_since;
     let scopes = crate::active_scopes();
     println!(
-        "[{}] worker: start (scopes: {}; {claimed} pending write(s))",
+        "[{}] worker[{trigger}]: start (scopes: {}; {claimed} pending write(s))",
         memory_core::iso_now(),
         scopes.join("+")
     );
 
-    let limit = pass_limit(claimed, w.max_targets);
+    let limit = limit_override.unwrap_or_else(|| pass_limit(claimed, w.max_targets));
     let mut parts: Vec<String> = Vec::new();
     let mut healthy = true;
     let mut did_work = false;
+    let mut metric = Metric {
+        job: "consolidate".into(),
+        trigger: trigger.into(),
+        scopes: scopes.join("+"),
+        pending: claimed,
+        ok: true,
+        ..Metric::default()
+    };
+    let meter = Meter::start();
     match crate::consolidate_pass(&dir, &scopes, limit) {
         Ok((0, _, _)) => parts.push("consolidate: nothing in scope".into()),
         Ok((n, edges, review)) => {
             did_work = true;
+            metric.targets = n as u64;
+            metric.new_edges = edges as u64;
+            metric.review = review as u64;
             let mut p = format!("consolidate: {n} belief(s) → {edges} new edge(s)");
             if review > 0 {
                 p.push_str(&format!(", ⚑{review} for review"));
@@ -415,22 +640,44 @@ pub fn run_worker() {
         }
         Err(e) => {
             healthy = false;
+            metric.ok = false;
+            metric.error = e.clone();
             parts.push(format!("consolidate failed: {e}"));
         }
     }
+    meter.finish(&mut metric);
+    append_metric(&dir, &metric);
 
-    // Dream piggybacks on a healthy pass at its own (much longer) cadence — no extra forks.
+    // Dream piggybacks on a healthy DUE-CHECK pass at its own (much longer) cadence — no extra
+    // forks; a deliberate `mem consolidate` stays consolidate-only.
     let mut dreamed = false;
-    if healthy && now.saturating_sub(state.last_dream) >= w.dream_interval_mins * 60 {
+    if !cli && healthy && now.saturating_sub(state.last_dream) >= w.dream_interval_mins * 60 {
+        let mut dm = Metric {
+            job: "dream".into(),
+            trigger: trigger.into(),
+            scopes: scopes.join("+"),
+            ok: true,
+            ..Metric::default()
+        };
+        let dmeter = Meter::start();
         match crate::dream_pass(&dir, &scopes, DREAM_LIMIT) {
             Ok(o) => {
                 dreamed = true; // even "too few beliefs" counts as a visit — don't re-check hourly
+                dm.targets = o.targets as u64;
+                dm.probes = o.recorded as u64;
+                dm.bridges = o.drawn as u64;
                 if o.targets > 0 {
                     parts.push(format!("dream: {} bridge(s) / {} probe(s)", o.drawn, o.recorded));
                 }
             }
-            Err(e) => parts.push(format!("dream failed: {e}")),
+            Err(e) => {
+                dm.ok = false;
+                dm.error = e.clone();
+                parts.push(format!("dream failed: {e}"));
+            }
         }
+        dmeter.finish(&mut dm);
+        append_metric(&dir, &dm);
     }
 
     let summary = parts.join(" · ");
@@ -511,6 +758,10 @@ pub fn cmd_worker(args: &[String]) {
         println!("lock: free");
     }
     println!("due now: {}", if consolidate_due(&s, &w, now) { "yes" } else { "no" });
+    let metrics = metrics_block(&dir, 3);
+    if !metrics.is_empty() {
+        print!("{metrics}");
+    }
     println!("log: {}", dir.join(LOG_FILE).display());
     println!("\nforce a pass: mem worker --now   ·   switch off: MEM_NO_BG=1 (or worker.enabled=false in config.toml)");
 }
@@ -690,5 +941,99 @@ mod tests {
         assert_eq!(ago(180), "3m");
         assert_eq!(ago(7200), "2h");
         assert_eq!(ago(3 * 86_400), "3d");
+    }
+
+    #[test]
+    fn metric_round_trips_through_the_ledger() {
+        let dir = tmp("metrics");
+        let m = Metric {
+            at: "2026-07-30T12:00:00.000Z".into(),
+            job: "consolidate".into(),
+            trigger: "worker".into(),
+            scopes: "global+repo:x".into(),
+            pending: 5,
+            targets: 5,
+            new_edges: 3,
+            review: 2,
+            probes: 0,
+            bridges: 0,
+            chat_calls: 17,
+            chat_ms: 42_000,
+            embed_texts: 5,
+            duration_ms: 45_210,
+            ok: true,
+            error: String::new(),
+        };
+        append_metric(&dir, &m);
+        let mut failed = Metric {
+            job: "dream".into(),
+            trigger: "cli-fg".into(),
+            ok: false,
+            error: "embedding failed (\"backend\" down)\nline2".into(),
+            at: "2026-07-30T13:00:00.000Z".into(),
+            ..Metric::default()
+        };
+        append_metric(&dir, &failed);
+        let back = load_metrics(&dir);
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0], m, "exact round-trip");
+        failed.error = "embedding failed ('backend' down) line2".into(); // sanitized on write
+        assert_eq!(back[1], failed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn metrics_block_aggregates_and_tails() {
+        let dir = tmp("metrics-block");
+        assert_eq!(metrics_block(&dir, 3), "", "no ledger → no block");
+        for i in 0..4 {
+            append_metric(&dir, &Metric {
+                at: format!("2026-07-30T12:0{i}:00.000Z"),
+                job: "consolidate".into(),
+                trigger: "worker".into(),
+                targets: 2,
+                new_edges: 1,
+                chat_calls: 6,
+                duration_ms: 30_000,
+                ok: i != 3, // last one failed
+                error: if i == 3 { "boom".into() } else { String::new() },
+                ..Metric::default()
+            });
+        }
+        let block = metrics_block(&dir, 2);
+        assert!(block.contains("consolidate ×4"), "{block}");
+        assert!(block.contains("24 chat"), "chat calls summed: {block}");
+        assert!(block.contains("1 failed"), "{block}");
+        assert!(block.contains("FAILED: boom"), "recent tail shows the failure: {block}");
+        assert_eq!(block.matches("  • ").count(), 2, "tail limited to `recent`");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dur_renders_ms_seconds_minutes() {
+        assert_eq!(dur(750), "750ms");
+        assert_eq!(dur(45_210), "45.2s");
+        assert_eq!(dur(154_000), "2m34s");
+    }
+
+    #[test]
+    fn worker_args_parse_limit_and_cli_marker() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(parse_worker_args(&a(&[])), (None, false), "bare = due-check semantics");
+        assert_eq!(parse_worker_args(&a(&["--limit", "30", "--cli"])), (Some(30), true));
+        assert_eq!(parse_worker_args(&a(&["--cli"])), (None, true));
+        assert_eq!(parse_worker_args(&a(&["--limit", "x"])), (None, false), "bad number → default");
+    }
+
+    #[test]
+    fn foreground_pass_drains_like_a_worker_run() {
+        let dir = tmp("fgpass");
+        save_state(&dir, &WorkerState { writes_since: 5, ..WorkerState::default() });
+        finish_foreground_pass(&dir, 5, false);
+        assert_eq!(load_state(&dir).writes_since, 5, "no work → backlog kept (retry semantics)");
+        assert!(load_state(&dir).last_run > 0, "but last_run advances (throttle)");
+        finish_foreground_pass(&dir, 5, true);
+        assert_eq!(load_state(&dir).writes_since, 0, "worked → claimed backlog drained");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

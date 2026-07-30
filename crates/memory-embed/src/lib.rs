@@ -7,6 +7,53 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// --- instrumentation (process-local; every LLM touch flows through this crate) ----------
+//
+// The worker/CLI snapshot these before and after a pass and persist the DELTA to the metrics
+// ledger, so "what did that run cost" is measurable without threading counters through every
+// linker. Attempts are counted whether or not the call succeeds — a failed call still burned
+// wall-clock and a curl.
+
+static CHAT_CALLS: AtomicU64 = AtomicU64::new(0);
+static CHAT_MS: AtomicU64 = AtomicU64::new(0);
+static EMBED_CALLS: AtomicU64 = AtomicU64::new(0);
+static EMBED_TEXTS: AtomicU64 = AtomicU64::new(0);
+static EMBED_MS: AtomicU64 = AtomicU64::new(0);
+
+/// A snapshot of this process's cumulative LLM traffic. Subtract two snapshots for a per-pass
+/// delta (`later.delta(&earlier)`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LlmCounters {
+    pub chat_calls: u64,
+    pub chat_ms: u64,
+    pub embed_calls: u64,
+    pub embed_texts: u64,
+    pub embed_ms: u64,
+}
+
+impl LlmCounters {
+    pub fn delta(&self, earlier: &LlmCounters) -> LlmCounters {
+        LlmCounters {
+            chat_calls: self.chat_calls.saturating_sub(earlier.chat_calls),
+            chat_ms: self.chat_ms.saturating_sub(earlier.chat_ms),
+            embed_calls: self.embed_calls.saturating_sub(earlier.embed_calls),
+            embed_texts: self.embed_texts.saturating_sub(earlier.embed_texts),
+            embed_ms: self.embed_ms.saturating_sub(earlier.embed_ms),
+        }
+    }
+}
+
+pub fn counters() -> LlmCounters {
+    LlmCounters {
+        chat_calls: CHAT_CALLS.load(Ordering::Relaxed),
+        chat_ms: CHAT_MS.load(Ordering::Relaxed),
+        embed_calls: EMBED_CALLS.load(Ordering::Relaxed),
+        embed_texts: EMBED_TEXTS.load(Ordering::Relaxed),
+        embed_ms: EMBED_MS.load(Ordering::Relaxed),
+    }
+}
 
 pub struct Ollama {
     pub url: String,
@@ -25,8 +72,17 @@ impl Ollama {
     /// as strings so callers can fall back to lexical.
     pub fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
         if inputs.is_empty() {
-            return Ok(vec![]);
+            return Ok(vec![]); // no backend touched — not counted
         }
+        let t0 = std::time::Instant::now();
+        let r = self.embed_uncounted(inputs);
+        EMBED_CALLS.fetch_add(1, Ordering::Relaxed);
+        EMBED_TEXTS.fetch_add(inputs.len() as u64, Ordering::Relaxed);
+        EMBED_MS.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+        r
+    }
+
+    fn embed_uncounted(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
         let body = json!({ "model": self.model, "input": inputs }).to_string();
         let mut child = Command::new("curl")
             .args([
@@ -71,6 +127,14 @@ impl Ollama {
 /// output (`format: json`, temperature 0) and returns the parsed object. Used by the judgment
 /// linker. Errors (ollama down, model not pulled, non-JSON) come back as strings.
 pub fn chat_json(url: &str, model: &str, system: &str, user: &str) -> Result<Value, String> {
+    let t0 = std::time::Instant::now();
+    let r = chat_json_uncounted(url, model, system, user);
+    CHAT_CALLS.fetch_add(1, Ordering::Relaxed);
+    CHAT_MS.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+    r
+}
+
+fn chat_json_uncounted(url: &str, model: &str, system: &str, user: &str) -> Result<Value, String> {
     let body = json!({
         "model": model,
         "messages": [
@@ -137,4 +201,30 @@ pub fn save_cache(dir: &Path, model: &str, cache: &HashMap<String, Vec<f32>>) {
         cache.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
     let doc = json!({ "model": model, "vectors": vectors });
     let _ = std::fs::write(dir.join(".embeddings.json"), doc.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counters_track_attempts_even_on_failure() {
+        let before = counters();
+        // a port nothing listens on: fails fast, no network needed — still one counted attempt
+        let _ = chat_json("http://127.0.0.1:9", "x", "s", "u");
+        let oll = Ollama { url: "http://127.0.0.1:9".into(), model: "x".into() };
+        let _ = oll.embed(&["a".into(), "b".into()]);
+        let d = counters().delta(&before);
+        assert_eq!(d.chat_calls, 1, "failed chat still counts as an attempt");
+        assert_eq!(d.embed_calls, 1);
+        assert_eq!(d.embed_texts, 2, "texts counted per input, not per call");
+    }
+
+    #[test]
+    fn empty_embed_batch_is_not_counted() {
+        let before = counters();
+        let oll = Ollama { url: "http://127.0.0.1:9".into(), model: "x".into() };
+        assert!(oll.embed(&[]).unwrap().is_empty());
+        assert_eq!(counters().delta(&before), LlmCounters::default());
+    }
 }
