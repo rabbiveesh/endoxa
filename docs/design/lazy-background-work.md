@@ -203,3 +203,7 @@ Every pass — background or foreground — is now **measured**, and deliberate 
   inline path still records its metric and drains the backlog it covered.
 - **`mem dream` stays foreground** (it's an observability artifact that prints its bridge rate)
   but is metered, and a deliberate dream resets the worker's weekly piggyback cadence.
+- **Lock-held skip is loud, not silent:** a deliberate detached `mem consolidate` that loses the
+  worker lock (a due-check pass is mid-flight) surfaces `consolidate SKIPPED … rerun: mem
+  consolidate --limit N` on the next read and records an `ok:false` ledger line — the caller's
+  explicit limit must not be dropped invisibly. A skipped due-check kick stays silent (fungible).

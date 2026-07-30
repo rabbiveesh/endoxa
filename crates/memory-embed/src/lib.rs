@@ -207,24 +207,20 @@ pub fn save_cache(dir: &Path, model: &str, cache: &HashMap<String, Vec<f32>>) {
 mod tests {
     use super::*;
 
+    /// ONE sequential test: the counters are process-global atomics, and two parallel tests
+    /// snapshotting deltas would race each other's increments.
     #[test]
-    fn counters_track_attempts_even_on_failure() {
+    fn counters_track_attempts_and_skip_empty_batches() {
+        let oll = Ollama { url: "http://127.0.0.1:9".into(), model: "x".into() };
         let before = counters();
+        assert!(oll.embed(&[]).unwrap().is_empty());
+        assert_eq!(counters().delta(&before), LlmCounters::default(), "empty batch touches no backend — not counted");
         // a port nothing listens on: fails fast, no network needed — still one counted attempt
         let _ = chat_json("http://127.0.0.1:9", "x", "s", "u");
-        let oll = Ollama { url: "http://127.0.0.1:9".into(), model: "x".into() };
         let _ = oll.embed(&["a".into(), "b".into()]);
         let d = counters().delta(&before);
         assert_eq!(d.chat_calls, 1, "failed chat still counts as an attempt");
         assert_eq!(d.embed_calls, 1);
         assert_eq!(d.embed_texts, 2, "texts counted per input, not per call");
-    }
-
-    #[test]
-    fn empty_embed_batch_is_not_counted() {
-        let before = counters();
-        let oll = Ollama { url: "http://127.0.0.1:9".into(), model: "x".into() };
-        assert!(oll.embed(&[]).unwrap().is_empty());
-        assert_eq!(counters().delta(&before), LlmCounters::default());
     }
 }

@@ -128,7 +128,7 @@ pub fn save_state(dir: &Path, s: &WorkerState) {
 /// Keep the summary safe inside our one-line hand-rolled JSON (same discipline as the novelty
 /// ledger): no quotes, backslashes, or newlines survive.
 fn sanitize(s: &str) -> String {
-    s.replace('\\', " ").replace('"', "'").replace('\n', " ")
+    s.replace('\\', " ").replace('"', "'").replace('\n', " ").replace('\r', " ")
 }
 
 /// Read a bare (unquoted) u64 after `marker`. `crate::jget_num` is f32 — not enough mantissa for
@@ -594,6 +594,29 @@ pub fn run_worker(args: &[String]) {
     let w = crate::load_settings().worker;
     let Some(_lock) = WorkerLock::try_acquire(&dir) else {
         println!("[{}] worker: lock held — another worker is running; exiting", memory_core::iso_now());
+        // A due-check kick is fungible (the running worker covers the same backlog) — skip
+        // silently. A deliberate detached `mem consolidate` is NOT: the caller's explicit limit
+        // is being dropped after they were told it's running, so surface the skip on the next
+        // read and record it in the ledger.
+        if cli {
+            let hint = limit_override.map(|l| format!(" --limit {l}")).unwrap_or_default();
+            {
+                let _guard = lock_state(&dir);
+                let mut s = load_state(&dir);
+                s.last_summary =
+                    sanitize(&format!("consolidate SKIPPED (another worker was running) — rerun: mem consolidate{hint}"));
+                s.summary_at = epoch_now();
+                save_state(&dir, &s);
+            }
+            append_metric(&dir, &Metric {
+                at: memory_core::iso_now(),
+                job: "consolidate".into(),
+                trigger: "cli".into(),
+                ok: false,
+                error: "skipped: lock held".into(),
+                ..Metric::default()
+            });
+        }
         return;
     };
     let now = epoch_now();

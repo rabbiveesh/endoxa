@@ -999,6 +999,12 @@ fn cmd_consolidate(args: &[String]) {
         Ok((0, _, _)) if limit > 0 => println!("Nothing to consolidate in scope ({}).", scopes.join(", ")),
         Ok((n, total, n_review)) => {
             println!("consolidated {n} belief(s); drew {total} new edge(s)");
+            // Same honesty affordance as the worker path: the drained backlog was bigger than
+            // this pass covered, and later passes will NOT revisit the tail (newest-first, no
+            // cursor) — name the command that does.
+            if n > 0 && claimed > n as u64 {
+                println!("(covered the newest {n} of a {claimed}-write backlog — cover the rest: mem consolidate --limit {claimed})");
+            }
             // Frontier-review nudge: the judge emits supports/refines but can't safely tell a
             // justification (depends_on) from corroboration — hand candidates to the frontier agent.
             if n_review > 0 {
