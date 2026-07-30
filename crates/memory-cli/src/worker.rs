@@ -17,8 +17,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const STATE_FILE: &str = ".worker-state.json";
+const STATE_LOCK_FILE: &str = ".worker-state.lock";
 const LOCK_FILE: &str = ".worker.lock";
 const LOG_FILE: &str = ".worker.log";
+
+/// Rotate `.worker.log` once it grows past this (one old generation kept).
+const LOG_ROTATE_BYTES: u64 = 1_000_000;
 
 /// A lock this old is presumed abandoned regardless of its pid (guards against pid reuse making a
 /// long-dead holder look alive). Generous: a real pass is minutes, not hours.
@@ -104,8 +108,9 @@ pub fn load_state(dir: &Path) -> WorkerState {
     }
 }
 
-/// Atomic replace (write tmp, rename) so a concurrent reader never sees a torn file. Foreground
-/// and worker may both write; last-writer-wins on the whole line is acceptable for counters.
+/// Atomic replace (write tmp, rename) so a concurrent reader never sees a torn file. Every
+/// read-modify-write of the state goes through `lock_state` — the whole line is rewritten, so a
+/// lost update would lose more than a counter blip (a run's summary, the `last_run` anchor).
 pub fn save_state(dir: &Path, s: &WorkerState) {
     let json = format!(
         "{{\"last_run\":{},\"last_dream\":{},\"writes_since\":{},\"summary_at\":{},\"surfaced_at\":{},\"last_summary\":\"{}\"}}\n",
@@ -139,6 +144,44 @@ fn epoch_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Serializes state-file read-modify-writes across foreground commands AND the worker (the
+/// `WorkerLock` below only serializes workers). Held for microseconds; a contender spins briefly,
+/// steals an abandoned lock (≥10 s old — three orders of magnitude past a real hold), and after
+/// ~250 ms proceeds UNLOCKED rather than ever hanging a foreground `mem` — a rare lost update
+/// beats a blocked prompt.
+struct StateLock {
+    path: PathBuf,
+}
+
+fn lock_state(dir: &Path) -> Option<StateLock> {
+    let path = dir.join(STATE_LOCK_FILE);
+    for _ in 0..50 {
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return Some(StateLock { path }),
+            Err(_) => {
+                let abandoned = std::fs::metadata(&path)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.elapsed().ok())
+                    .map(|d| d.as_secs() >= 10)
+                    .unwrap_or(false);
+                if abandoned {
+                    let _ = std::fs::remove_file(&path);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
+    }
+    None
+}
+
+impl Drop for StateLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 // --- due-check (cheap, deterministic, work-first) ---------------------------------------
 
 /// Is a consolidate pass due? Work-based primary (threshold writes AND the min-interval throttle),
@@ -168,15 +211,19 @@ pub fn note_writes_and_kick(dir: &Path, n: usize) {
     if n == 0 {
         return;
     }
-    let existed = state_path(dir).exists();
-    let mut s = load_state(dir);
-    if !existed {
-        let now = epoch_now();
-        s.last_run = now;
-        s.last_dream = now;
-    }
-    s.writes_since += n as u64;
-    save_state(dir, &s);
+    let s = {
+        let _guard = lock_state(dir);
+        let existed = state_path(dir).exists();
+        let mut s = load_state(dir);
+        if !existed {
+            let now = epoch_now();
+            s.last_run = now;
+            s.last_dream = now;
+        }
+        s.writes_since += n as u64;
+        save_state(dir, &s);
+        s
+    }; // lock released before the (slower) spawn
     let w = crate::load_settings().worker;
     if worker_allowed(&w) && consolidate_due(&s, &w, epoch_now()) {
         let _ = spawn_detached(dir);
@@ -186,9 +233,13 @@ pub fn note_writes_and_kick(dir: &Path, n: usize) {
 /// Print the one-line "what the background did" (at the top of `recall`/`ask`) — each summary
 /// exactly once. Reads/updates state; a running worker is NOT reported here (see `mem worker`).
 pub fn surface_last_run(dir: &Path) {
+    if !unsurfaced(&load_state(dir)) {
+        return; // cheap unlocked pre-check: the common no-news path takes no lock
+    }
+    let _guard = lock_state(dir);
     let mut s = load_state(dir);
     if !unsurfaced(&s) {
-        return;
+        return; // someone else surfaced it between the pre-check and the lock
     }
     println!("🛠 background {} — {} ago\n", s.last_summary, ago(epoch_now().saturating_sub(s.summary_at)));
     s.surfaced_at = s.summary_at;
@@ -215,10 +266,16 @@ fn ago(secs: u64) -> String {
 /// triggered it ("the trigger is the user already being in the right place").
 fn spawn_detached(dir: &Path) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let log_path = dir.join(LOG_FILE);
+    // Bounded log: rotate once, keep one old generation. A racing worker's open fd follows the
+    // rename harmlessly (it keeps appending to `.worker.log.1`).
+    if std::fs::metadata(&log_path).map(|m| m.len() > LOG_ROTATE_BYTES).unwrap_or(false) {
+        let _ = std::fs::rename(&log_path, dir.join(format!("{LOG_FILE}.1")));
+    }
     let log = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join(LOG_FILE))
+        .open(&log_path)
         .map_err(|e| e.to_string())?;
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = std::process::Command::new(exe);
@@ -273,19 +330,20 @@ impl Drop for WorkerLock {
 }
 
 fn lock_is_stale(path: &Path) -> bool {
+    // Age is one signal, not a gate: `elapsed()` errors when the mtime is in the FUTURE (clock
+    // stepped back, restored VM snapshot) — fall through to the pid check rather than letting a
+    // dead holder's lock block all background work until the wall clock catches up.
     let age = std::fs::metadata(path)
         .ok()
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.elapsed().ok())
         .map(|d| d.as_secs());
-    match age {
-        None => return false, // vanished under us — treat as contended this round
-        Some(a) if a >= STALE_LOCK_SECS => return true,
-        _ => {}
+    if matches!(age, Some(a) if a >= STALE_LOCK_SECS) {
+        return true; // impossibly old (guards pid reuse)
     }
     match lock_holder(path) {
         Some(pid) => !pid_alive(pid),
-        None => false, // no pid recorded yet (holder is between create and write) — contended
+        None => false, // vanished, or no pid recorded yet (holder mid-create) — contended
     }
 }
 
@@ -307,9 +365,10 @@ fn pid_alive(_pid: u32) -> bool {
 // --- the worker itself (`mem __worker`, hidden) -----------------------------------------
 
 /// The detached body: lock, snapshot the pending-write count, run the due passes, then update
-/// state — subtracting only the writes THIS run claimed, so writes that land mid-run stay
-/// pending for the next one. `last_run` advances even on a failed pass (the min-interval then
-/// throttles retries); only a KILLED run leaves state untouched and re-triggers.
+/// state. The claimed writes are DRAINED only when the pass actually consolidated something —
+/// a failed pass (backend down) or an empty-scope pass keeps the backlog pending so it retries /
+/// catches up later; `last_run` still advances, so the min-interval throttles those retries.
+/// Only a KILLED run leaves state fully untouched and re-triggers immediately.
 pub fn run_worker() {
     let dir = crate::store_dir();
     let w = crate::load_settings().worker;
@@ -327,12 +386,14 @@ pub fn run_worker() {
         scopes.join("+")
     );
 
-    let limit = claimed.clamp(1, w.max_targets) as usize;
+    let limit = pass_limit(claimed, w.max_targets);
     let mut parts: Vec<String> = Vec::new();
     let mut healthy = true;
+    let mut did_work = false;
     match crate::consolidate_pass(&dir, &scopes, limit) {
         Ok((0, _, _)) => parts.push("consolidate: nothing in scope".into()),
         Ok((n, edges, review)) => {
+            did_work = true;
             let mut p = format!("consolidate: {n} belief(s) → {edges} new edge(s)");
             if review > 0 {
                 p.push_str(&format!(", ⚑{review} for review"));
@@ -360,17 +421,31 @@ pub fn run_worker() {
     }
 
     let summary = parts.join(" · ");
-    // Re-read state: the foreground may have recorded more writes while we ran — preserve them.
-    let mut fresh = load_state(&dir);
-    fresh.writes_since = fresh.writes_since.saturating_sub(claimed);
-    fresh.last_run = now;
-    if dreamed {
-        fresh.last_dream = now;
+    {
+        let _guard = lock_state(&dir);
+        // Re-read state: the foreground may have recorded more writes while we ran — preserve them.
+        let mut fresh = load_state(&dir);
+        if did_work {
+            // Drain only what a REAL pass covered; a failed or nothing-in-scope pass keeps the
+            // backlog so it retries (or catches up when the user is next active in its scope).
+            fresh.writes_since = fresh.writes_since.saturating_sub(claimed);
+        }
+        fresh.last_run = now;
+        if dreamed {
+            fresh.last_dream = now;
+        }
+        fresh.last_summary = sanitize(&summary);
+        fresh.summary_at = now;
+        save_state(&dir, &fresh);
     }
-    fresh.last_summary = sanitize(&summary);
-    fresh.summary_at = now;
-    save_state(&dir, &fresh);
     println!("[{}] worker: done — {summary}", memory_core::iso_now());
+}
+
+/// Beliefs to consolidate this pass: the claimed backlog, at least 1 (a forced `--now` pass with
+/// nothing pending still visits the newest belief), capped at `max_targets`. A configured
+/// `max_targets` of 0 is treated as 1 — `clamp` on the inverted range would panic.
+fn pass_limit(claimed: u64, max_targets: u64) -> usize {
+    claimed.max(1).min(max_targets.max(1)) as usize
 }
 
 // --- the manual control surface (`mem worker [--now]`) ----------------------------------
@@ -556,6 +631,26 @@ mod tests {
         let l = WorkerLock::try_acquire(&dir);
         assert!(l.is_some(), "a lock whose holder is dead is stolen");
         drop(l);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pass_limit_never_panics_and_bounds_the_backlog() {
+        assert_eq!(pass_limit(0, 12), 1, "forced pass with nothing pending still visits 1");
+        assert_eq!(pass_limit(5, 12), 5, "backlog below the cap passes through");
+        assert_eq!(pass_limit(40, 12), 12, "a big import is capped, catches up across passes");
+        assert_eq!(pass_limit(5, 0), 1, "max_targets=0 must not panic (inverted clamp range)");
+        assert_eq!(pass_limit(0, 0), 1);
+    }
+
+    #[test]
+    fn state_lock_excludes_then_frees_and_steals_abandoned() {
+        let dir = tmp("statelock");
+        let l1 = lock_state(&dir).expect("first state lock");
+        // a live contender spins its ~250ms and then gives up (proceed-unlocked policy)
+        assert!(lock_state(&dir).is_none(), "held → contender must not acquire");
+        drop(l1);
+        assert!(lock_state(&dir).is_some(), "freed on drop");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

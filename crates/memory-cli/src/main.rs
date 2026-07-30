@@ -51,7 +51,10 @@ impl Default for Settings {
 
 /// Layered load (precedence: defaults < file < env), done OFF-THE-SHELF by the `config` crate.
 ///  - file: `$XDG_CONFIG_HOME/agentic-memory/config.toml` (fallback `$HOME/.config/...`), optional.
-///  - env: `MEM_RECALL_BRIDGES=false` (prefix MEM, `_` separator, parsed → bool).
+///  - env: `MEM_RECALL_BRIDGES=false` (prefix MEM, `_` separator, parsed → bool). CAVEAT: the `_`
+///    separator means only SINGLE-word keys are env-addressable (`MEM_WORKER_ENABLED` works;
+///    `MEM_WORKER_MAX_TARGETS` parses as `worker.max.targets` and is silently ignored) — multi-word
+///    worker knobs are config.toml-only; the worker kill switch is the separate `MEM_NO_BG=1`.
 /// On ANY error we degrade to Settings::default().
 fn load_settings() -> Settings {
     let cfg_path = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
@@ -939,7 +942,9 @@ fn cmd_consolidate(args: &[String]) {
     let scopes = active_scopes();
     match consolidate_pass(&dir, &scopes, limit) {
         Err(e) => eprintln!("{e}; can't run candidate generation"),
-        Ok((0, _, _)) => println!("Nothing to consolidate in scope ({}).", scopes.join(", ")),
+        // 0 targets with a real limit = empty scope; `--limit 0` falls through to the normal
+        // report (0 consolidated + the review nudge), as before the pass extraction.
+        Ok((0, _, _)) if limit > 0 => println!("Nothing to consolidate in scope ({}).", scopes.join(", ")),
         Ok((n, total, n_review)) => {
             println!("consolidated {n} belief(s); drew {total} new edge(s)");
             // Frontier-review nudge: the judge emits supports/refines but can't safely tell a
@@ -1108,7 +1113,8 @@ fn cmd_dream(args: &[String]) {
     let scopes = active_scopes();
     match dream_pass(&dir, &scopes, limit) {
         Err(e) => eprintln!("{e}; can't dream"),
-        Ok(o) if o.targets == 0 => println!("Need at least 2 beliefs in scope to dream."),
+        // 0 targets with a real limit = too few beliefs; `--limit 0` still reports the rate.
+        Ok(o) if o.targets == 0 && limit > 0 => println!("Need at least 2 beliefs in scope to dream."),
         Ok(o) => {
             let rate = if o.attempts > 0 { o.bridges as f32 / o.attempts as f32 * 100.0 } else { 0.0 };
             println!("bridge rate: {rate:.1}% ({}/{} far pairs ever bridged)", o.bridges, o.attempts);
@@ -1136,7 +1142,8 @@ struct DreamOutcome {
 
 /// The REM/novelty pass shared by `mem dream` and the background worker: probe the most-unrelated
 /// pairs for bridges, persist every probe to the ledger, commit the rare bridges. `targets == 0`
-/// means there was nothing to dream over; `Err` only when the embedding backend is down.
+/// means the scope held fewer than 2 beliefs OR the caller passed `limit == 0` (callers that care
+/// distinguish on their own limit); `Err` only when the embedding backend is down.
 fn dream_pass(dir: &PathBuf, scopes: &[String], limit: usize) -> Result<DreamOutcome, String> {
     let none = |targets| DreamOutcome { targets, drawn: 0, recorded: 0, attempts: 0, bridges: 0, props: Vec::new() };
     let g = match Graph::load_dir(dir) {

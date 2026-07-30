@@ -139,8 +139,12 @@ The shipped first cut follows the mechanism above with these deltas and decision
 - **Scope of a background run (spec open question → DECIDED):** the worker inherits the triggering
   invocation's cwd and derives the SAME active scope, not store-wide. This is the spec's own reason
   №1 taken seriously — "the trigger is the user already being in the right place" — and it prevents
-  a global pass from drawing edges between unrelated branch scopes. Cost: beliefs written in repo A
-  don't consolidate until you're next active in A (or its max-interval trips there).
+  a global pass from drawing edges between unrelated branch scopes. The pending-write counter is
+  drained only by a pass that actually consolidated targets, so a pass that finds nothing in scope
+  leaves the backlog pending and repo A's writes re-trigger when you're next active in A. Known
+  imprecision: the counter is store-global, so a pass in repo B that DOES have targets drains it
+  even when the pending writes were A's (harmless — consolidation is idempotent and newest-first;
+  per-scope counters are a later refinement if it ever bites).
 - **Tasks (spec open question → DECIDED):** `consolidate` opportunistic (bounded by the pending
   write count, capped at `worker.max_targets`); `dream` piggybacks on a healthy pass at its own much
   longer cadence (`worker.dream_interval_mins`, default weekly, `--limit 4`); `reduce` stays manual.
@@ -158,13 +162,19 @@ The shipped first cut follows the mechanism above with these deltas and decision
   `process_group(0)` (std, no libc `setsid` needed) so the terminal's Ctrl-C never reaches it.
 - **State:** `.worker-state.json` — epoch-second timestamps (exact u64 parse; the f32 ledger parser
   would corrupt epochs), atomic tmp+rename replace, `writes_since` drained by subtraction so writes
-  landing mid-run stay pending. `last_run` advances even on a FAILED pass (min-interval throttles
-  retries; the failure is surfaced honestly); only a killed run re-triggers immediately.
+  landing mid-run stay pending. Every read-modify-write (foreground count, surfacing, the worker's
+  final update) is serialized by a `.worker-state.lock` micro-lock (µs hold; a contender spins
+  ~250 ms then proceeds unlocked rather than ever hanging the foreground). A FAILED pass advances
+  `last_run` (min-interval throttles retries; the failure is surfaced honestly) but does NOT drain
+  the backlog, so the work retries; only a killed run re-triggers immediately. `.worker.log`
+  rotates once past ~1 MB (one old generation kept).
 - **First-write anchor:** creating the state file stamps `last_run`/`last_dream` = now, so a
   brand-new store doesn't fork a surprise LLM pass on write №1; intervals count from first use.
 - **Knob names:** `worker.enabled`, `worker.consolidate_after_writes`, `worker.min_interval_mins`,
   `worker.max_interval_mins`, `worker.dream_interval_mins`, `worker.max_targets` (integer minutes,
-  not duration strings — the hand-rolled config layer stays dumb), plus env `MEM_NO_BG=1`.
+  not duration strings — the hand-rolled config layer stays dumb), plus env `MEM_NO_BG=1`. The
+  multi-word knobs are config.toml-only: the `MEM_*` env layer's `_` separator can't address them
+  (`MEM_WORKER_MAX_TARGETS` → `worker.max.targets`, silently ignored).
 - **Not built (yet):** the "don't kick when the foreground command itself uses the LLM" refinement
   (risk №1) — moot today because none of the WRITE commands that kick are LLM-on-read, and the lock
   already serializes workers; revisit if `ask` ever becomes a trigger point.
