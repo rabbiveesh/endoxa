@@ -644,13 +644,30 @@ mod tests {
     }
 
     #[test]
-    fn state_lock_excludes_then_frees_and_steals_abandoned() {
+    fn state_lock_excludes_then_frees() {
         let dir = tmp("statelock");
         let l1 = lock_state(&dir).expect("first state lock");
         // a live contender spins its ~250ms and then gives up (proceed-unlocked policy)
         assert!(lock_state(&dir).is_none(), "held → contender must not acquire");
         drop(l1);
         assert!(lock_state(&dir).is_some(), "freed on drop");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn state_lock_steals_an_abandoned_lock() {
+        let dir = tmp("statelock-stale");
+        let path = dir.join(STATE_LOCK_FILE);
+        std::fs::write(&path, "").unwrap();
+        // age the lock past the 10s abandonment bar (µs holds never get near it)
+        assert!(std::process::Command::new("touch")
+            .args(["-d", "1 hour ago"])
+            .arg(&path)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false));
+        assert!(lock_state(&dir).is_some(), "an abandoned state lock is stolen, not spun on");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
