@@ -78,11 +78,20 @@ rough *effort*, and a *done-when* gate.
 - **Done when:** a harvested debt belief auto-resurfaces in recall after its forcing-constraint belief
   is superseded.
 
-### N6. World `assumption` reaches the reducer (V3) — ⏸ PUNTED (2026-06-15)
-> **Flagged for later, pending a use-case discussion.** Decision deferred: before choosing *how* a
-> world/assumption is expressed live (worlds.toml vs a `mem world` command vs branch-scopes-only),
-> settle *what most users actually need* world-relative reduction for. Until then it stays a
-> corpus-only demo. Do not build the live worlds surface yet.
+### N6. World `assumption` reaches the reducer (V3) — ✅ BUILT (2026-08-02); LLM gate pending one ollama run
+> **Shipped end-to-end** (the "most ambitious thing" pass): the design fork was resolved by making
+> the live surface the corpus format, verbatim — a `worlds.json` in (or beside) the store, so a
+> corpus dir already IS a store. Core grew the worlds machinery (`World`,
+> `defeated_with`/`defeated_in` = suppress-then-refixpoint, `frontier_flips`), the CLI grew
+> **`mem world [list|show|diff]`**, **`mem relive <as-of-time>`** (bitemporal replay, the ROADMAP
+> "worlds and reliving" surface), and **`mem ask --world <w>`** — which does BOTH V3 halves:
+> world-frontier recompute (reachable) + assumption threaded into the reducer prompt (selectable).
+> **`eval-worlds`** re-proves the V3 reachability table deterministically over every worlds.json
+> corpus (helix + composr: 15 checks, 0 failures, in CI reach — no LLM), and its `--llm` mode is
+> the graduation gate below. Branch scopes stay untouched as the other live world-analog.
+> **Still open:** the `--llm` pass (needs ollama) hasn't been recorded yet — the
+> `reduction_fixtures` stay TARGET until `cargo run -p memory-cli --bin eval-worlds -- --llm`
+> shows each fixture×world cell selecting its own world's gold answer. The original entry follows.
 - **Why:** suppress makes the dissent belief *reachable*; the world's `assumption` is what lets the
   reducer *select* it (3/3). Today the reducer doesn't see the assumption.
 - **First step:** thread `world.assumption` into the L3 reduction prompt when reducing under a non-
@@ -143,12 +152,12 @@ on something only a human can resolve, so the autonomous pass stops here. The fo
   `forcing_constraint`, `revisit_when`) parsed into `Belief` and a UX decision: is a resurfaced debt
   a recall *filter*, a banner on normal recall, or a dedicated `mem debt` command? **Needs onboarding
   Tier 2 to generate debt beliefs first.**
-- **N6 (world-relative reducer) — blocked on a DESIGN FORK.** V3 proved the reducer needs each
-  world's `assumption` string to *select* the dissent answer. In the corpus that lives in
-  `worlds.json`. **The live store has no worlds and no assumption surface** — its only world-analog is
-  branch scopes (`repo:id@branch`), which carry suppress-like divergence but **no assumption text**.
-  Shipping N6 for real use needs a decision on how a world/assumption is expressed live (see the
-  question put to the user).
+- **N6 (world-relative reducer) — UNBLOCKED (2026-08-02).** The fork was resolved in favor of
+  "the corpus format IS the live format": a `worlds.json` in/beside the store defines named
+  assumptions + suppress sets; `mem world`/`mem ask --world`/`mem relive` are the surface;
+  `eval-worlds` is the keystone. Branch scopes remain the scope-derived world-analog (no assumption
+  text) — a branch world that wants reducer-selectable identity gets a worlds.json entry. Remaining:
+  record the `eval-worlds --llm` pass to graduate the fixtures TARGET → DEMONSTRATED.
 - **N4 follow-on (make `DependsOn` non-inert) — IMPLEMENTED + a model-limit finding (2026-06-15).**
   The `JudgmentLinker` can now emit `depends_on`, high-precision by design: a `depends_on` is admitted
   only if (1) the dependent's `directness` is `inferred`/`reduced` (never an independently-grounded

@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod worlds;
+
 // --- settings (memory-cli ONLY; layered defaults < file < env via the `config` crate) ---
 
 #[derive(Debug, Deserialize)]
@@ -87,13 +89,15 @@ fn main() {
         Some("link") => cmd_link(&args[1..]),
         Some("debt") => cmd_debt(&args[1..]),
         Some("onboard") => cmd_onboard(&args[1..]),
+        Some("world") => cmd_world(&args[1..]),
+        Some("relive") => cmd_relive(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
             eprintln!("usage:");
             eprintln!("  mem remember \"<claim>\" [--supersedes <slug|id>] [--global] [--ref R] [--body B]");
             eprintln!("  mem recall \"<query>\" [--limit N] [--no-bridges]");
             eprintln!("  mem expand <slug|id>          # one-hop: show a belief's linked context");
-            eprintln!("  mem ask \"<question>\" [--limit N]  # LLM-synthesized grounded answer (opt-in)");
+            eprintln!("  mem ask \"<question>\" [--limit N] [--world W]  # LLM-synthesized grounded answer (opt-in; world-relative with --world)");
             eprintln!("  mem forget <slug|id> [--reason R]  # retract a belief: recall drops it (file kept)");
             eprintln!("  mem promote [<branch>] [--dry-run]  # lift a merged branch's beliefs into repo canon");
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
@@ -103,6 +107,8 @@ fn main() {
             eprintln!("  mem link <subj> <kind> <obj> [--rationale R]  # author a durable edge (frontier/human adjudication)");
             eprintln!("  mem debt [<query>]            # list known-debt (deficiency) beliefs; ⚠ resurfaces when a blocked_on constraint lifts");
             eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--tier2] [--commit]  # lead harvest → claim drafts (+§3b debt envelope) → store");
+            eprintln!("  mem world [list|show <name>|diff <a> <b>]  # parallel realities: per-world frontiers from worlds.json");
+            eprintln!("  mem relive <as-of-time> [--all]  # bitemporal replay: the frontier as it stood then, diffed vs now");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -413,10 +419,12 @@ missing in `gaps`. Be concise. Reply JSON: \
 fn cmd_ask(args: &[String]) {
     let mut question = String::new();
     let mut limit = 8usize;
+    let mut world_name: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(8); i += 1; }
+            "--world" => { world_name = args.get(i + 1).cloned(); i += 1; }
             s if question.is_empty() => question = s.to_string(),
             s => { question.push(' '); question.push_str(s); }
         }
@@ -435,11 +443,38 @@ fn cmd_ask(args: &[String]) {
         Err(_) => { println!("No memories yet."); return; }
     };
     let sg = scoped_graph(&g, &scopes);
-    let defeated = sg.defeated();
+
+    // World-relative reduction (V3/N6): the suppress-set makes the dissent beliefs REACHABLE
+    // (suppress → refixpoint below), the world's assumption makes them SELECTABLE (threaded
+    // into the reducer context further down). Both halves are load-bearing — V3 measured 0/3
+    // without the recompute and the reducer can't pick the dissent side without the assumption.
+    let world = world_name.as_deref().map(|name| {
+        let Some(wf) = worlds::load(&dir) else {
+            eprintln!("--world {name}: no worlds.json found in {} (or beside it)", dir.display());
+            std::process::exit(2);
+        };
+        match wf.get(name) {
+            Some(w) => w.clone(),
+            None => {
+                eprintln!(
+                    "no world '{name}' — have: {}",
+                    wf.worlds.iter().map(|w| w.name.as_str()).collect::<Vec<_>>().join(", ")
+                );
+                std::process::exit(2);
+            }
+        }
+    });
+    let defeated = match &world {
+        Some(w) => sg.defeated_in(w),
+        None => sg.defeated(),
+    };
     let current = sg.current_content(&defeated);
     if current.is_empty() {
         println!("No memory in scope ({}).", scopes.join(", "));
         return;
+    }
+    if let Some(w) = &world {
+        println!("world {} — {}\n", w.name, w.assumption);
     }
 
     let mut hits = match rank(&dir, &current, &question) {
@@ -463,7 +498,15 @@ fn cmd_ask(args: &[String]) {
     // the trusted-reducer gate; the frontier pre-filter is the other half.
     let detected_conflicts = live_conflicts_among_hits(&sg, &defeated, &hits);
 
-    let mut ctx = format!("Question: {question}\n\nBeliefs:\n");
+    let mut ctx = String::new();
+    if let Some(w) = &world {
+        ctx.push_str(&format!(
+            "Working assumption (world '{}'): {}\nAnswer AS IF this assumption holds — when \
+             several beliefs are live, prefer the one this assumption selects.\n\n",
+            w.name, w.assumption
+        ));
+    }
+    ctx.push_str(&format!("Question: {question}\n\nBeliefs:\n"));
     for (_id, slug, claim, _s) in &hits {
         ctx.push_str(&format!("- [{slug}] {claim}\n"));
     }
@@ -549,6 +592,191 @@ fn live_conflicts_among_hits(g: &Graph, defeated: &std::collections::HashSet<Str
         }
     }
     out
+}
+
+// --- worlds + reliving (design §5 / V3 / N6) --------------------------------------------
+
+/// `mem world [list|show <name>|diff <a> <b>]` — the parallel-realities surface. A world is a
+/// named assumption + a suppress set (in `worlds.json`, beside or inside the store — the corpus
+/// format, verbatim); resolving it re-runs the frontier fixpoint without the suppressed defeats,
+/// so the SAME immutable beliefs yield a different current-set. Deterministic, no LLM.
+fn cmd_world(args: &[String]) {
+    let dir = store_dir();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) if !g.is_empty() => g,
+        _ => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &active_scopes());
+    let Some(wf) = worlds::load(&dir) else {
+        println!("No worlds.json found in {} (or beside it).", dir.display());
+        println!("Only `main` exists here. A world is a named assumption + a suppress list:");
+        println!("  {{ \"worlds\": {{ \"main\": {{ \"default\": true, \"assumption\": \"...\" }},");
+        println!("                \"dissent\": {{ \"assumption\": \"...\", \"suppress\": [\"<slug>\"] }} }} }}");
+        return;
+    };
+    let default = wf.default_world().cloned().unwrap_or_default();
+    let d_default = sg.defeated_in(&default);
+
+    match args.first().map(|s| s.as_str()) {
+        None | Some("list") => {
+            println!("worlds ({}):", wf.path.display());
+            let total = sg.content().count();
+            for w in &wf.worlds {
+                let d = sg.defeated_in(w);
+                let live = total - sg.content().filter(|b| d.contains(&b.id)).count();
+                let tag = if w.is_default { " (default)" } else { "" };
+                println!("\n• {}{tag} — {}", w.name, w.assumption);
+                if !w.suppress.is_empty() {
+                    println!("    suppress (defeats dropped): {}", w.suppress.join(", "));
+                }
+                let flips = sg.frontier_flips(&d_default, &d);
+                print!("    {live}/{total} beliefs live");
+                if w.name != default.name && !flips.is_empty() {
+                    let s: Vec<String> = flips
+                        .iter()
+                        .map(|(b, la, lb)| {
+                            format!("{} {}", b.slug, if *la && !*lb { "live→DEFEAT" } else { "DEFEAT→live" })
+                        })
+                        .collect();
+                    print!(" · flips vs {}: {}", default.name, s.join(", "));
+                }
+                println!();
+            }
+            println!("\nnext: mem world show <name> · mem world diff <a> <b> · mem ask \"<q>\" --world <name>");
+        }
+        Some("show") => {
+            let Some(name) = args.get(1) else { eprintln!("usage: mem world show <name>"); std::process::exit(2); };
+            let Some(w) = wf.get(name) else {
+                eprintln!("no world '{name}' — have: {}", wf.worlds.iter().map(|w| w.name.as_str()).collect::<Vec<_>>().join(", "));
+                std::process::exit(2);
+            };
+            let d = sg.defeated_in(w);
+            println!("world {} — {}", w.name, w.assumption);
+            if !w.suppress.is_empty() {
+                println!("suppress: {}", w.suppress.join(", "));
+            }
+            let total = sg.content().count();
+            let live = total - sg.content().filter(|b| d.contains(&b.id)).count();
+            println!("{live}/{total} beliefs live on this frontier");
+            let flips = sg.frontier_flips(&d_default, &d);
+            if w.name != default.name {
+                if flips.is_empty() {
+                    println!("no divergence vs {} — this world currently changes nothing", default.name);
+                } else {
+                    println!("divergence vs {}:", default.name);
+                    for (b, _la, lb) in &flips {
+                        let status = if *lb { "live  " } else { "DEFEAT" };
+                        println!("  [{status}] [{}] {}", b.slug, truncate(&b.claim, 90));
+                    }
+                }
+            }
+            println!("\nnext: mem ask \"<q>\" --world {}   (reduce under this assumption)", w.name);
+        }
+        Some("diff") => {
+            let (Some(an), Some(bn)) = (args.get(1), args.get(2)) else {
+                eprintln!("usage: mem world diff <a> <b>");
+                std::process::exit(2);
+            };
+            let (Some(wa), Some(wb)) = (wf.get(an), wf.get(bn)) else {
+                eprintln!("unknown world — have: {}", wf.worlds.iter().map(|w| w.name.as_str()).collect::<Vec<_>>().join(", "));
+                std::process::exit(2);
+            };
+            let (da, db) = (sg.defeated_in(wa), sg.defeated_in(wb));
+            let flips = sg.frontier_flips(&da, &db);
+            if flips.is_empty() {
+                println!("{an} and {bn} share one frontier — no belief flips.");
+                return;
+            }
+            println!("beliefs whose current-status flips between {an} and {bn}:");
+            for (b, la, lb) in &flips {
+                let f = |v: bool| if v { "live" } else { "defeated" };
+                println!("  [{}] {an}={} {bn}={} — {}", b.slug, f(*la), f(*lb), truncate(&b.claim, 70));
+            }
+        }
+        Some(other) => {
+            eprintln!("unknown subcommand '{other}' — usage: mem world [list|show <name>|diff <a> <b>]");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// `mem relive <as-of-time> [--all]` — bitemporal replay: rebuild the graph as it stood at a
+/// transaction time (later beliefs don't exist yet, so later defeats genuinely un-happen),
+/// resolve THAT frontier, and diff it against now. Answers "what did we believe then?" — the
+/// append-only store's reason for never deleting. A date alone means end-of-that-day.
+fn cmd_relive(args: &[String]) {
+    let mut t = String::new();
+    let mut show_all = false;
+    for a in args {
+        match a.as_str() {
+            "--all" => show_all = true,
+            s if t.is_empty() => t = s.to_string(),
+            _ => {}
+        }
+    }
+    if t.is_empty() {
+        eprintln!("usage: mem relive <as-of-time> [--all]   e.g. mem relive 2026-03-01");
+        std::process::exit(2);
+    }
+    if t.len() == 10 {
+        t.push_str("T23:59:59.999Z"); // a bare date means "as of end of that day"
+    }
+
+    let dir = store_dir();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) if !g.is_empty() => g,
+        _ => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &active_scopes());
+    let then_g = sg.as_of(&t);
+    let d_then = then_g.defeated();
+    let d_now = sg.defeated();
+
+    let existed = then_g.content().count();
+    let total = sg.content().count();
+    let live_then = then_g.current_content(&d_then).len();
+    println!("as of {t}: {existed}/{total} beliefs existed; {live_then} were current\n");
+
+    // The relive diff: what we believed then that we no longer do, and what wasn't yet believed.
+    let mut dropped: Vec<&Belief> = then_g
+        .current_content(&d_then)
+        .into_iter()
+        .filter(|b| d_now.contains(&b.id))
+        .collect();
+    dropped.sort_by(|a, b| a.slug.cmp(&b.slug));
+    if !dropped.is_empty() {
+        println!("believed then, since defeated:");
+        for b in &dropped {
+            println!("  [{}] {}", b.slug, truncate(&b.claim, 90));
+        }
+    }
+    let mut revived: Vec<&Belief> = sg
+        .current_content(&d_now)
+        .into_iter()
+        .filter(|b| then_g.by_id(&b.id).is_some() && d_then.contains(&b.id))
+        .collect();
+    revived.sort_by(|a, b| a.slug.cmp(&b.slug));
+    if !revived.is_empty() {
+        println!("defeated then, since reinstated:");
+        for b in &revived {
+            println!("  [{}] {}", b.slug, truncate(&b.claim, 90));
+        }
+    }
+    let newer = total - existed;
+    if newer > 0 {
+        println!("({newer} belief(s) recorded after {t} didn't exist yet)");
+    }
+    if dropped.is_empty() && revived.is_empty() {
+        println!("every belief current then is still current — no defeats separate then from now.");
+    }
+    if show_all {
+        println!("\nfull frontier as of {t}:");
+        let mut cur = then_g.current_content(&d_then);
+        cur.sort_by(|a, b| a.slug.cmp(&b.slug));
+        for b in cur {
+            println!("  [{}] {}", b.slug, truncate(&b.claim, 90));
+        }
+    }
 }
 
 /// Machine-inferred edge authors whose edges are a REGENERABLE layer (redrawn by an unattended

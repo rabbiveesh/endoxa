@@ -28,7 +28,10 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   `Belief::parse` (hand-rolled zero-dep frontmatter parser), `EdgeKind` + `Semantic` registry, and
   **`defeated()`** — the frontier resolver (alternating fixpoint; two defeat modes: `supersedes` is
   monotonic version-chain, `adjudicates`/`retracts` are non-monotonic verdicts → verdict-of-a-verdict
-  reinstates). The `Linker` trait + value types live here (impls in `memory-consolidate`).
+  reinstates). **Worlds machinery**: `World` + `defeated_with(suppress)`/`defeated_in(world)`
+  (suppress-then-refixpoint — V3's load-bearing op), `as_of(txn_time)` (bitemporal replay),
+  `frontier_flips` (world/relive diff). The `Linker` trait + value types live here (impls in
+  `memory-consolidate`).
   - `src/bin/eval.rs` — deterministic keystone eval: frontier vs naive refuted-list (no LLM).
   - `src/bin/recall.rs` — recall harness.
 - **`crates/memory-cli`** (`mem`) — the user surface. Subcommands: `remember`, `recall`, `expand`,
@@ -36,9 +39,14 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   (lift a branch's beliefs into repo canon), `consolidate` (LLM judge draws edges), `reduce`
   (duplicate `same-as` fold), `dream` (REM/novelty bridge pass), `review` (frontier-adjudication queue
   for candidate `depends_on`), `link <s> <kind> <o>` (author a durable `frontier@1` edge), `debt`
-  (known-debt query + `blocked_on` auto-resurface), `onboard [--tier2]`. Runs per-invocation in a repo
+  (known-debt query + `blocked_on` auto-resurface), `onboard [--tier2]`, **`world [list|show|diff]`**
+  (parallel realities from `worlds.json` in/beside the store — corpus format verbatim), **`relive
+  <as-of-time>`** (bitemporal replay diffed vs now), **`ask --world <w>`** (world-relative reduction:
+  suppress→refixpoint + the world's assumption threaded into the prompt). Runs per-invocation in a repo
   so it sees LOCAL git state → derives the active scope. Commands print the next step (legible without
   docs). `src/bin/eval-qa.rs` is the **template harness** for any corpus+LLM evaluation.
+  `src/bin/eval-worlds.rs` is the **worlds keystone**: deterministic V3-reachability re-proof over
+  every worlds.json corpus (CI-able, no LLM), plus `--llm` for the N6 fixture-divergence graduation gate.
 - **`crates/memory-embed`** — ollama-backed embeddings (shells to `curl`, no HTTP crate) + on-disk
   vector cache. `Ollama::from_env()`, `.embed()`, `chat_json(url,model,system,user)`,
   `load_cache(dir,model)` / `save_cache`. Embed model `nomic-embed-text` (asymmetric: docs prefixed
@@ -56,8 +64,11 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   - **`worlds.json`** (helix + composr only): `{ worlds:{name:{default?,assumption,suppress?:[slug]}},
     reduction_fixtures:[{query,neighborhood:[slug],expected_by_world:{world:text},status}] }`. A
     world suppresses defeating edges from `suppress` slugs and recomputes the frontier → parallel
-    realities. `reduction_fixtures` are the GOLD divergent answers (the reducer-behaves-world-
-    relatively demo is a TARGET, not yet demonstrated). Reference resolver: `corpus/_worlds.py`.
+    realities. `reduction_fixtures` are the GOLD divergent answers. The deterministic substrate
+    (dissent beliefs reachable per world) is verified in-tree by `eval-worlds`; the LLM half
+    (reducer *selects* world-relatively) runs via `eval-worlds --llm` (needs ollama) — fixtures
+    stay TARGET until that pass is recorded. Reference resolver: `corpus/_worlds.py` (NB: it is
+    simplified — no `retracts`, and non-monotonic supersedes; core's `defeated()` is the truth).
   - Corpora are append-only: never patch a belief, append a correction that defeats it.
 - **Real fact store** `~/.local/share/agentic-memory/beliefs/` (= `$MEMORY_DIR`, default) — the
   user's LIVE 330 beliefs + `.embeddings.json`. **READ-ONLY in experiments.** Real beliefs are

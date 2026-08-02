@@ -57,12 +57,20 @@ bottleneck at scale is the `.embeddings.json` parse, not belief loading. So, in 
    CTEs, HNSW for vectors) — only past a few thousand beliefs, and never as a second
    source of truth.
 
-## Worlds and reliving
+## Worlds and reliving — surface SHIPPED (2026-08-02)
 
 Branch worlds already fall out of scope-filtering before frontier resolution. The
-fuller story — replay the belief state as-of a time ("what did we believe when we
-shipped 1.0?"), diff two worlds, relive a defeated line of reasoning — is designed
-into the append-only substrate but has no surface yet.
+fuller story now has its surface: `mem world [list|show|diff]` resolves named
+worlds (`worlds.json` in/beside the store — the corpus format verbatim) via
+suppress-then-refixpoint in core (`Graph::defeated_in`); `mem relive <as-of-time>`
+replays the belief state as-of a transaction time and diffs it against now
+("what did we believe when we shipped 1.0?" — including reliving a defeated line
+of reasoning, since later defeats don't exist yet in the replay); and
+`mem ask --world <w>` reduces world-relatively (assumption threaded into the
+prompt). `eval-worlds` keeps the substrate honest deterministically; its `--llm`
+mode is the still-unrecorded fixture-divergence demonstration (N6's gate).
+Remaining: `valid_time` (world-as-of-a-date, distinct from txn replay) per
+Bitemporality above.
 
 ## Evals at scale
 
