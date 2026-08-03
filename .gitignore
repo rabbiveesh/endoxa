@@ -18,8 +18,9 @@ docs/corpus-agent-prompt.md
 # Rust build output
 /target
 
-# Local embedding cache
+# Local embedding cache (+ its derived binary sidecar — always regenerable)
 .embeddings.json
+.embeddings.bin
 
 # Claude worktree experiments — throwaway
 .claude/worktrees/

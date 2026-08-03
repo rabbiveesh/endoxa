@@ -225,9 +225,31 @@ fn ollama_chat_json(url: &str, model: &str, system: &str, user: &str) -> Result<
     serde_json::from_str(content).map_err(|e| format!("judge returned non-JSON ({e}): {content}"))
 }
 
+/// Load the vector cache. Fast path is the **binary sidecar** `.embeddings.bin` (ROADMAP
+/// scale-path step 1: the measured cold-start bottleneck is the embeddings-JSON *parse*, not
+/// embed compute); `.embeddings.json` stays the durable, git-committable form (corpora ship
+/// it) and the authority whenever it is newer than the sidecar — in which case the sidecar is
+/// transparently rebuilt. Both are derived caches over L0; deleting either is always safe.
 pub fn load_cache(dir: &Path, model: &str) -> HashMap<String, Vec<f32>> {
-    let path = dir.join(".embeddings.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let json_path = dir.join(".embeddings.json");
+    let bin_path = dir.join(".embeddings.bin");
+    let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    if let (Some(bt), jt) = (mtime(&bin_path), mtime(&json_path)) {
+        if jt.map_or(true, |jt| bt >= jt) {
+            if let Some(map) = load_bin(&bin_path, model) {
+                return map;
+            }
+        }
+    }
+    let map = load_json(&json_path, model);
+    if !map.is_empty() {
+        let _ = save_bin(&bin_path, model, &map); // migrate: next load takes the fast path
+    }
+    map
+}
+
+fn load_json(path: &Path, model: &str) -> HashMap<String, Vec<f32>> {
+    let Ok(text) = std::fs::read_to_string(path) else {
         return HashMap::new();
     };
     let Ok(v) = serde_json::from_str::<Value>(&text) else {
@@ -270,6 +292,62 @@ mod tests {
         );
     }
 
+    fn tmpdir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("memvec-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn sample() -> HashMap<String, Vec<f32>> {
+        let mut m = HashMap::new();
+        m.insert("b_aaa".to_string(), vec![0.25f32, -1.5, 3.0]);
+        m.insert("b_bbb".to_string(), vec![0.0f32; 768]);
+        m
+    }
+
+    #[test]
+    fn sidecar_round_trips_and_is_preferred() {
+        let d = tmpdir("roundtrip");
+        save_cache(&d, "nomic-embed-text", &sample());
+        assert!(d.join(".embeddings.bin").is_file(), "sidecar written");
+        // bin path used (delete json to prove it): identical content back
+        std::fs::remove_file(d.join(".embeddings.json")).unwrap();
+        let back = load_cache(&d, "nomic-embed-text");
+        assert_eq!(back, sample(), "binary round-trip is exact (f32 bit-precise)");
+        // wrong model → cache miss, never wrong vectors
+        assert!(load_cache(&d, "other-model").is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn newer_json_wins_and_rebuilds_the_sidecar() {
+        let d = tmpdir("freshness");
+        save_cache(&d, "m", &sample());
+        // hand-edit the JSON afterwards (the committed corpus-cache workflow) — json is now newer
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let doc = json!({ "model": "m", "vectors": { "b_new": [1.0, 2.0] } });
+        std::fs::write(d.join(".embeddings.json"), doc.to_string()).unwrap();
+        let back = load_cache(&d, "m");
+        assert_eq!(back.len(), 1);
+        assert_eq!(back["b_new"], vec![1.0f32, 2.0]);
+        // and the sidecar was rebuilt from it: json gone → bin still serves the new content
+        std::fs::remove_file(d.join(".embeddings.json")).unwrap();
+        assert_eq!(load_cache(&d, "m")["b_new"], vec![1.0f32, 2.0]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn corrupt_sidecar_falls_back_to_json() {
+        let d = tmpdir("corrupt");
+        save_cache(&d, "m", &sample());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(d.join(".embeddings.bin"), b"MEMVEC1\0garbage").unwrap(); // truncated
+        let back = load_cache(&d, "m");
+        assert_eq!(back, sample(), "malformed sidecar → json authority, no panic");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn extract_json_tolerates_provider_quirks() {
         // clean
@@ -284,9 +362,72 @@ mod tests {
     }
 }
 
+/// Save the vector cache: JSON (durable/committable) + the binary sidecar (fast reload).
 pub fn save_cache(dir: &Path, model: &str, cache: &HashMap<String, Vec<f32>>) {
     let vectors: serde_json::Map<String, Value> =
         cache.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
     let doc = json!({ "model": model, "vectors": vectors });
     let _ = std::fs::write(dir.join(".embeddings.json"), doc.to_string());
+    let _ = save_bin(&dir.join(".embeddings.bin"), model, cache);
+}
+
+// Sidecar format (little-endian, length-prefixed; no alignment games):
+//   magic "MEMVEC1\0" · u32 model_len · model utf8 · u32 count ·
+//   count × ( u32 id_len · id utf8 · u32 vec_len · vec_len × f32 )
+const BIN_MAGIC: &[u8; 8] = b"MEMVEC1\0";
+
+fn save_bin(path: &Path, model: &str, cache: &HashMap<String, Vec<f32>>) -> std::io::Result<()> {
+    let mut buf: Vec<u8> = Vec::with_capacity(64 + cache.len() * (32 + 768 * 4));
+    buf.extend_from_slice(BIN_MAGIC);
+    buf.extend_from_slice(&(model.len() as u32).to_le_bytes());
+    buf.extend_from_slice(model.as_bytes());
+    buf.extend_from_slice(&(cache.len() as u32).to_le_bytes());
+    for (id, vec) in cache {
+        buf.extend_from_slice(&(id.len() as u32).to_le_bytes());
+        buf.extend_from_slice(id.as_bytes());
+        buf.extend_from_slice(&(vec.len() as u32).to_le_bytes());
+        for f in vec {
+            buf.extend_from_slice(&f.to_le_bytes());
+        }
+    }
+    // write-then-rename so a killed process never leaves a truncated sidecar in place
+    let tmp = path.with_extension("bin.tmp");
+    std::fs::write(&tmp, &buf)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// `None` on any malformation (bad magic, wrong model, truncation) → caller falls back to
+/// JSON and rewrites the sidecar. Corruption can never poison the cache, only slow one load.
+fn load_bin(path: &Path, model: &str) -> Option<HashMap<String, Vec<f32>>> {
+    let buf = std::fs::read(path).ok()?;
+    let mut at = 0usize;
+    let take = |at: &mut usize, n: usize| -> Option<&[u8]> {
+        let s = buf.get(*at..*at + n)?;
+        *at += n;
+        Some(s)
+    };
+    let u32_at = |at: &mut usize| -> Option<u32> {
+        take(at, 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    if take(&mut at, 8)? != BIN_MAGIC {
+        return None;
+    }
+    let mlen = u32_at(&mut at)? as usize;
+    if std::str::from_utf8(take(&mut at, mlen)?).ok()? != model {
+        return None;
+    }
+    let count = u32_at(&mut at)? as usize;
+    let mut map = HashMap::with_capacity(count);
+    for _ in 0..count {
+        let ilen = u32_at(&mut at)? as usize;
+        let id = std::str::from_utf8(take(&mut at, ilen)?).ok()?.to_string();
+        let vlen = u32_at(&mut at)? as usize;
+        let raw = take(&mut at, vlen * 4)?;
+        let vec: Vec<f32> = raw
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        map.insert(id, vec);
+    }
+    Some(map)
 }
