@@ -34,6 +34,14 @@ facts that aren't in them. If a working assumption is given, answer AS IF it hol
 beliefs are live, prefer the one the assumption selects. Cite the [slug] of every belief you draw \
 on. Be concise. Reply JSON: {\"answer\": \"...\", \"cited\": [\"slug\"]}";
 
+/// Blind grading fallback when embeddings are unavailable: the judge sees only the candidate
+/// and LETTER-labeled references (never world names), so it can't pattern-match the world —
+/// it must match the substantive claim.
+const GRADE_SYSTEM: &str = "You compare a candidate answer against labeled reference answers. \
+Pick the reference that makes the SAME substantive claim as the candidate — judge the claim, \
+not the wording. Reply JSON: {\"closest\": \"<label>\"} (or {\"closest\": \"none\"} if no \
+reference matches).";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let llm = args.iter().any(|a| a == "--llm");
@@ -215,7 +223,9 @@ fn run_llm_fixture(
         }
     }
 
-    // grade: embed answers + golds; own-world gold must be the nearest
+    // grade: preferred = embedding proximity (own-world gold must be the nearest); fallback
+    // when embeddings are unavailable = a BLIND LLM judge over letter-labeled references,
+    // through the same pluggable chat seam (`GRADE_MODEL`, default = the reducer's ref).
     let mut texts: Vec<String> = Vec::new();
     for (_, a) in &answers {
         texts.push(format!("search_document: {a}"));
@@ -223,26 +233,49 @@ fn run_llm_fixture(
     for (_, exp) in &f.expected_by_world {
         texts.push(format!("search_document: {exp}"));
     }
-    let vecs = match oll.embed(&texts) {
-        Ok(v) => v,
-        Err(e) => {
-            println!("    (grading unavailable: {e})");
-            *errors += 1;
-            return;
+    match oll.embed(&texts) {
+        Ok(vecs) => {
+            let (ans_vecs, gold_vecs) = vecs.split_at(answers.len());
+            for (i, (wname, _)) in answers.iter().enumerate() {
+                let own = f.expected_by_world.iter().position(|(w, _)| w == wname);
+                let Some(own) = own else { continue };
+                let own_sim = cosine(&ans_vecs[i], &gold_vecs[own]);
+                let best_other = (0..gold_vecs.len())
+                    .filter(|&j| j != own)
+                    .map(|j| cosine(&ans_vecs[i], &gold_vecs[j]))
+                    .fold(f32::MIN, f32::max);
+                let pass = own_sim > best_other;
+                println!("    {wname}: own-gold {:.3} vs best-other {:.3} → {} (embed-graded)", own_sim, best_other, if pass { "PASS" } else { "FAIL" });
+                cells.push((format!("{corpus}: {}", truncate(&f.query, 50)), wname.clone(), pass));
+            }
         }
-    };
-    let (ans_vecs, gold_vecs) = vecs.split_at(answers.len());
-    for (i, (wname, _)) in answers.iter().enumerate() {
-        let own = f.expected_by_world.iter().position(|(w, _)| w == wname);
-        let Some(own) = own else { continue };
-        let own_sim = cosine(&ans_vecs[i], &gold_vecs[own]);
-        let best_other = (0..gold_vecs.len())
-            .filter(|&j| j != own)
-            .map(|j| cosine(&ans_vecs[i], &gold_vecs[j]))
-            .fold(f32::MIN, f32::max);
-        let pass = own_sim > best_other;
-        println!("    {wname}: own-gold {:.3} vs best-other {:.3} → {}", own_sim, best_other, if pass { "PASS" } else { "FAIL" });
-        cells.push((format!("{corpus}: {}", truncate(&f.query, 50)), wname.clone(), pass));
+        Err(e) => {
+            println!("    (embeddings unavailable: {e} → blind LLM-judge grading)");
+            let grade_model = std::env::var("GRADE_MODEL").unwrap_or_else(|_| model.clone());
+            let labels: Vec<String> = (0..f.expected_by_world.len())
+                .map(|j| char::from(b'A' + j as u8).to_string())
+                .collect();
+            for (wname, ans) in &answers {
+                let Some(own) = f.expected_by_world.iter().position(|(w, _)| w == wname) else { continue };
+                let mut user = format!("Candidate answer:\n{ans}\n\nReference answers:\n");
+                for (j, (_w, exp)) in f.expected_by_world.iter().enumerate() {
+                    user.push_str(&format!("{}: {exp}\n", labels[j]));
+                }
+                user.push_str("\nWhich reference makes the same substantive claim as the candidate?");
+                match memory_embed::chat_json(&oll.url, &grade_model, GRADE_SYSTEM, &user) {
+                    Ok(v) => {
+                        let chosen = v.get("closest").and_then(|x| x.as_str()).unwrap_or("none").trim().to_uppercase();
+                        let pass = chosen == labels[own];
+                        println!("    {wname}: judge picked {chosen}, own is {} → {} (judge-graded)", labels[own], if pass { "PASS" } else { "FAIL" });
+                        cells.push((format!("{corpus}: {}", truncate(&f.query, 50)), wname.clone(), pass));
+                    }
+                    Err(e) => {
+                        println!("    {wname}: grading judge error: {e}");
+                        *errors += 1;
+                    }
+                }
+            }
+        }
     }
 }
 

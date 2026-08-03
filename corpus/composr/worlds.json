@@ -15,7 +15,7 @@
         "main": "Natively: composr replaces Laravel's `package:discover` and the clearCompiled handler, reaching 0 composer subprocess calls on a cold install.",
         "conservative": "By delegating the whole post-autoload-dump event to `composer run-script` — native handling is suppressed, and under the backward-compat assumption the reducer prefers delegation among the live options."
       },
-      "status": "TARGET fixture for world-relative reduction — NOT demonstrated. Requires the L3 reducer to actually run over each frontier; this file only fixes what divergence the two frontiers should produce."
+      "status": "DEMONSTRATED 2026-08-03: eval-worlds --llm passed this fixture in both worlds (reducer claude:sonnet via the pluggable chat-provider seam; blind letter-labeled LLM-judge grading — ollama embeddings unavailable that run; deterministic reachability in CI). Requires the L3 reducer to actually run over each frontier; this file only fixes what divergence the two frontiers should produce."
     },
     {
       "query": "How does composr handle composer plugins by default?",
@@ -24,7 +24,7 @@
         "main": "Three-tier policy: natively replicate known plugins (pest, spi), treat some as inert, delegate the unknown.",
         "conservative": "Delegate every plugin to `composer run-script` (native replication suppressed)."
       },
-      "status": "TARGET fixture — NOT demonstrated."
+      "status": "DEMONSTRATED 2026-08-03: eval-worlds --llm passed this fixture in both worlds (reducer claude:sonnet via the pluggable chat-provider seam; blind letter-labeled LLM-judge grading — ollama embeddings unavailable that run; deterministic reachability in CI)."
     }
   ]
 }

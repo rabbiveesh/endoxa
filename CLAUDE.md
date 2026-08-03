@@ -48,9 +48,15 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   `src/bin/eval-worlds.rs` is the **worlds keystone**: deterministic V3-reachability re-proof over
   every worlds.json corpus (CI-able, no LLM), plus `--llm` for the N6 fixture-divergence graduation gate.
 - **`crates/memory-embed`** — ollama-backed embeddings (shells to `curl`, no HTTP crate) + on-disk
-  vector cache. `Ollama::from_env()`, `.embed()`, `chat_json(url,model,system,user)`,
-  `load_cache(dir,model)` / `save_cache`. Embed model `nomic-embed-text` (asymmetric: docs prefixed
-  `search_document: `, queries `search_query: `).
+  vector cache + **the pluggable chat-provider seam**. `Ollama::from_env()`, `.embed()`,
+  `chat_json(url,model,system,user)`, `load_cache(dir,model)` / `save_cache`. Embed model
+  `nomic-embed-text` (asymmetric: docs prefixed `search_document: `, queries `search_query: `).
+  **Chat providers dispatch on the model ref** (`parse_model_ref`): `claude:sonnet` /
+  `claude-code[:m]` → the Claude Code CLI (`claude -p`, tools off, neutral cwd, `CLAUDE_BIN`/
+  `CLAUDE_CHAT_ARGS` env); `ollama:<m>` or any bare ref (e.g. `qwen2.5:7b`) → ollama. Since every
+  LLM call goes through `chat_json` and every caller reads its model from env, a provider switch
+  is just e.g. `JUDGE_MODEL=claude:sonnet` / `ASK_MODEL=claude:opus` — no code changes. Embeddings
+  stay ollama-only (Claude Code has no embedding endpoint).
 - **`crates/memory-consolidate`** — Linker impls (proximity heuristic + LLM judge), Reducer
   (duplicate fold), NoveltyDreamer, the `Consolidator` (SOLE edge writer — linkers only *propose*).
 - **`crates/memory-onboard`** — deterministic git-history harvest → lead files → judge-drafted claims.
@@ -64,11 +70,12 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   - **`worlds.json`** (helix + composr only): `{ worlds:{name:{default?,assumption,suppress?:[slug]}},
     reduction_fixtures:[{query,neighborhood:[slug],expected_by_world:{world:text},status}] }`. A
     world suppresses defeating edges from `suppress` slugs and recomputes the frontier → parallel
-    realities. `reduction_fixtures` are the GOLD divergent answers. The deterministic substrate
-    (dissent beliefs reachable per world) is verified in-tree by `eval-worlds`; the LLM half
-    (reducer *selects* world-relatively) runs via `eval-worlds --llm` (needs ollama) — fixtures
-    stay TARGET until that pass is recorded. Reference resolver: `corpus/_worlds.py` (NB: it is
-    simplified — no `retracts`, and non-monotonic supersedes; core's `defeated()` is the truth).
+    realities. `reduction_fixtures` are the GOLD divergent answers — **DEMONSTRATED 2026-08-03**:
+    `eval-worlds --llm` passed 6/6 fixture×world cells with `ASK_MODEL=claude:sonnet` (blind
+    LLM-judge grading; see next-experiments.md N6 for caveats). The deterministic substrate
+    (dissent beliefs reachable per world) is verified in-tree by `eval-worlds` (in CI).
+    Reference resolver: `corpus/_worlds.py` (NB: it is simplified — no `retracts`, and
+    non-monotonic supersedes; core's `defeated()` is the truth).
   - Corpora are append-only: never patch a belief, append a correction that defeats it.
 - **Real fact store** `~/.local/share/agentic-memory/beliefs/` (= `$MEMORY_DIR`, default) — the
   user's LIVE 330 beliefs + `.embeddings.json`. **READ-ONLY in experiments.** Real beliefs are
@@ -87,8 +94,10 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
 ## Build / run / LLM
 
 - `cargo build --workspace` ; `cargo run -q -p memory-core --bin eval` (deterministic, fast).
-- LLM evals need **ollama** (confirmed available): `qwen2.5:7b` (better, ~seconds/call on CPU),
-  `qwen2.5:3b` (faster), `nomic-embed-text` (embeddings). `JUDGE_MODEL`/`ASK_MODEL` env override.
+- LLM evals need a chat provider: **ollama** (`qwen2.5:7b` better ~seconds/call on CPU,
+  `qwen2.5:3b` faster) or **Claude Code** via provider-prefixed model refs (`claude:sonnet`,
+  `claude:haiku`, bare `claude` = CLI default). `JUDGE_MODEL`/`ASK_MODEL`/`TIER2_MODEL`/
+  `GRADE_MODEL` env take either form. Embeddings always need ollama (`nomic-embed-text`).
 - CI: `cargo test` on push/PR (`.github/workflows/ci.yml`).
 
 ## Design docs & open questions

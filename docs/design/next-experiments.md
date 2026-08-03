@@ -89,9 +89,18 @@ rough *effort*, and a *done-when* gate.
 > **`eval-worlds`** re-proves the V3 reachability table deterministically over every worlds.json
 > corpus (helix + composr: 15 checks, 0 failures, in CI reach — no LLM), and its `--llm` mode is
 > the graduation gate below. Branch scopes stay untouched as the other live world-analog.
-> **Still open:** the `--llm` pass (needs ollama) hasn't been recorded yet — the
-> `reduction_fixtures` stay TARGET until `cargo run -p memory-cli --bin eval-worlds -- --llm`
-> shows each fixture×world cell selecting its own world's gold answer. The original entry follows.
+> **GRADUATED (2026-08-03): the `--llm` pass is recorded — 6/6 fixture×world cells select their
+> own world's gold answer.** Run: `ASK_MODEL=claude:sonnet cargo run -p memory-cli --bin
+> eval-worlds -- --llm` (composr 2 fixtures × 2 worlds + helix 1 × 2; deterministic substrate
+> 15/15 alongside). Reducer = Claude Sonnet via the new pluggable chat-provider seam (the
+> Claude Code CLI backend); grading = the *blind* letter-labeled LLM judge fallback (ollama was
+> absent, so embedding-proximity grading couldn't run — the printed verbatim answers are the
+> primary evidence, same standard V3 used). Caveats, recorded not hidden: (1) this is not the
+> pinned qwen2.5:7b@0 reducer — the CLI exposes no temperature; an ollama re-run
+> (`eval-worlds --llm` with embeddings up) would make the demo model-diverse and
+> embedding-graded; (2) LLM-judge grading was V3's weak spot with qwen — here the judge is
+> blind (never sees world names) and every cell also passes by inspection. The original entry
+> follows.
 - **Why:** suppress makes the dissent belief *reachable*; the world's `assumption` is what lets the
   reducer *select* it (3/3). Today the reducer doesn't see the assumption.
 - **First step:** thread `world.assumption` into the L3 reduction prompt when reducing under a non-
@@ -156,8 +165,8 @@ on something only a human can resolve, so the autonomous pass stops here. The fo
   "the corpus format IS the live format": a `worlds.json` in/beside the store defines named
   assumptions + suppress sets; `mem world`/`mem ask --world`/`mem relive` are the surface;
   `eval-worlds` is the keystone. Branch scopes remain the scope-derived world-analog (no assumption
-  text) — a branch world that wants reducer-selectable identity gets a worlds.json entry. Remaining:
-  record the `eval-worlds --llm` pass to graduate the fixtures TARGET → DEMONSTRATED.
+  text) — a branch world that wants reducer-selectable identity gets a worlds.json entry. The
+  `eval-worlds --llm` pass is recorded (2026-08-03, 6/6 — see the N6 entry): fixtures GRADUATED.
 - **N4 follow-on (make `DependsOn` non-inert) — IMPLEMENTED + a model-limit finding (2026-06-15).**
   The `JudgmentLinker` can now emit `depends_on`, high-precision by design: a `depends_on` is admitted
   only if (1) the dependent's `directness` is `inferred`/`reduced` (never an independently-grounded

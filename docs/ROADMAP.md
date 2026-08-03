@@ -68,7 +68,8 @@ replays the belief state as-of a transaction time and diffs it against now
 of reasoning, since later defeats don't exist yet in the replay); and
 `mem ask --world <w>` reduces world-relatively (assumption threaded into the
 prompt). `eval-worlds` keeps the substrate honest deterministically; its `--llm`
-mode is the still-unrecorded fixture-divergence demonstration (N6's gate).
+mode passed 6/6 fixture×world cells on 2026-08-03 (claude:sonnet reducer via
+the pluggable chat-provider seam — see next-experiments.md N6 for caveats).
 Remaining: `valid_time` (world-as-of-a-date, distinct from txn replay) per
 Bitemporality above.
 
