@@ -750,6 +750,26 @@ fn cmd_relive(args: &[String]) {
             println!("  [{}] {}", b.slug, truncate(&b.claim, 90));
         }
     }
+    // Bitemporal second axis: beliefs we HELD then whose declared validity window says the
+    // world had already moved on (or hadn't arrived yet) at t. Believed-then ≠ true-of-the-
+    // world-then — `txn_time` answers the first, `valid_time` the second.
+    let mut anachronistic: Vec<&Belief> = then_g
+        .current_content(&d_then)
+        .into_iter()
+        .filter(|b| !b.valid_at(&t))
+        .collect();
+    anachronistic.sort_by(|a, b| a.slug.cmp(&b.slug));
+    if !anachronistic.is_empty() {
+        println!("believed then, but describing a different era (valid_time excludes {}):", &t[..10]);
+        for b in &anachronistic {
+            let window = format!(
+                "{}..{}",
+                b.valid_from.as_deref().unwrap_or(""),
+                b.valid_until.as_deref().unwrap_or("")
+            );
+            println!("  [{}] ({window}) {}", b.slug, truncate(&b.claim, 70));
+        }
+    }
     let mut revived: Vec<&Belief> = sg
         .current_content(&d_now)
         .into_iter()
