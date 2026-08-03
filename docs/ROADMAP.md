@@ -25,11 +25,15 @@ one cause: claims harvested from pre-rewrite commits get stated as current-state
   survived 4.2 years — why?"). Humans are bad at volunteering out-of-band knowledge
   cold and good at answering pointed questions; this is also the human-contribution UX.
 
-## Bitemporality
+## Bitemporality — parsing + the relive lens SHIPPED (2026-08-03)
 
-`txn_time` exists; `valid_time` is parsed but null everywhere. Beliefs about the
-world-as-of-a-date ("the API cap was 3 months *until March*") need it, and the
-onboarding currency fix above is the first consumer.
+`valid_time {start,end}` now parses into `Belief.valid_from/valid_until` and
+`Belief::valid_at(date)` is the second axis ("was it true OF THE WORLD then",
+vs `as_of`'s "did we BELIEVE it then"). `mem relive` separates them: a
+believed-then belief whose window excludes the replay date is flagged as
+describing a different era, not as wrong. Still open: the onboarding currency
+fix above (stamp `valid_time` from source-commit dates) — the first *writer*
+of validity windows outside hand-authored corpora.
 
 ## Pluggable relation semantics
 
@@ -38,12 +42,13 @@ that linkers/plugins populate when they register a relation kind (Defeat / Annot
 Collapse, and later Boost), so bring-your-own-linker extends to
 bring-your-own-semantics.
 
-## Real content ids
+## Real content ids — SHIPPED (2026-08-03)
 
-`content_id` is a placeholder (SipHash48). The real scheme is
-`sha256(observation)[:12]` — the id hashes the observation, not the proposition, so
-re-observing the same fact is a new belief and dedup stays a recall-time clustering
-problem (the Reducer), not an ingest-time identity problem.
+`content_id` is now `b_` + `sha256(observation)[:12]` (hand-rolled FIPS 180-4 in
+core, NIST-vector pinned; zero deps). The id hashes the observation, not the
+proposition, so re-observing the same fact is a new belief and dedup stays a
+recall-time clustering problem (the Reducer), not an ingest-time identity
+problem. Old SipHash ids coexist — ids are opaque and the store is append-only.
 
 ## Scale path (measured, waiting on its trigger)
 
@@ -51,8 +56,10 @@ From the 2026-06 backend spikes ([storage-backends.md](design/storage-backends.m
 flat files beat embedded databases until ~1–3k beliefs, and the real cold-start
 bottleneck at scale is the `.embeddings.json` parse, not belief loading. So, in order:
 
-1. **binary vector sidecar** for the embedding cache (closes most of the gap, zero
-   new dependencies);
+1. ~~**binary vector sidecar** for the embedding cache~~ — SHIPPED (2026-08-03):
+   `.embeddings.bin` (length-prefixed LE, magic MEMVEC1) is preferred on load when
+   at least as new as the JSON; the JSON stays the durable committable authority
+   and transparently rebuilds the sidecar when hand-edited. Zero new dependencies.
 2. **DuckDB + vss as a derived, disposable index** (graph adjacency via recursive
    CTEs, HNSW for vectors) — only past a few thousand beliefs, and never as a second
    source of truth.
