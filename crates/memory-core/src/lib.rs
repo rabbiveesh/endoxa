@@ -6,11 +6,12 @@
 //! LLM into core). First cut is hacky above L0; the belief *file format* is the durable part.
 
 pub mod confidence;
+pub mod hash;
 pub use confidence::StructuralConfidence;
+pub use hash::{sha256, sha256_hex};
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -185,6 +186,13 @@ pub struct Belief {
     /// ISO-8601 transaction time (when recorded). Lexically ordered. Lets the judge only
     /// propose supersedes from the genuinely-newer belief.
     pub txn_time: String,
+    /// Bitemporal validity window: when the claim was true IN THE WORLD, as opposed to when
+    /// we recorded it (`txn_time`). ISO dates, lexically ordered; either bound may be absent
+    /// (`valid_time: null` → both None = "no dated validity claimed"). A belief with
+    /// `valid_until` in the past is not *wrong*, it's *historical* — `mem relive` uses this
+    /// to separate "we believed it then" from "and it was still true of the world then".
+    pub valid_from: Option<String>,
+    pub valid_until: Option<String>,
     /// Known-debt envelope (§3b), present iff this belief records a compromise. Orthogonal to
     /// confidence: a deficient belief is still true and current — it just should change.
     pub deficiency: Option<Deficiency>,
@@ -195,6 +203,25 @@ pub struct Belief {
 }
 
 impl Belief {
+    /// Was this claim — per its declared validity window — true of the world at `date`?
+    /// (ISO date or datetime; only date parts are compared.) A belief with no window claims
+    /// no dated validity → true. This is the bitemporal second axis: `as_of` answers "did we
+    /// BELIEVE it then", `valid_at` answers "was it true OF THE WORLD then".
+    pub fn valid_at(&self, date: &str) -> bool {
+        let d = &date[..date.len().min(10)];
+        if let Some(from) = &self.valid_from {
+            if d < &from[..from.len().min(10)] {
+                return false;
+            }
+        }
+        if let Some(until) = &self.valid_until {
+            if d > &until[..until.len().min(10)] {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Parse one belief markdown file (YAML-ish frontmatter). Hand-rolled, zero-dep.
     pub fn parse(text: &str) -> Option<Belief> {
         let mut fm: Vec<&str> = Vec::new();
@@ -303,9 +330,21 @@ impl Belief {
                             rel_obj = v.trim().split_whitespace().next().unwrap_or("").to_string();
                         }
                     }
+                    // `valid_time` nests one level deeper (start:/end: at indent 4); those two
+                    // key names appear nowhere else under provenance, so flat matching is safe.
                     "provenance" => {
                         if let Some(v) = trimmed.strip_prefix("txn_time:") {
                             b.txn_time = v.trim().to_string();
+                        } else if let Some(v) = trimmed.strip_prefix("start:") {
+                            let v = v.trim();
+                            if !v.is_empty() && v != "null" && b.valid_from.is_none() {
+                                b.valid_from = Some(v.to_string());
+                            }
+                        } else if let Some(v) = trimmed.strip_prefix("end:") {
+                            let v = v.trim();
+                            if !v.is_empty() && v != "null" && b.valid_until.is_none() {
+                                b.valid_until = Some(v.to_string());
+                            }
                         }
                     }
                     // known-debt envelope (§3b): free-text values, single line each.
@@ -434,12 +473,15 @@ pub trait Linker {
 
 // --- ids + time (shared by the surface so edge-beliefs get stable ids) -------------------
 
-/// Placeholder content id (low 48 bits of std SipHash). Deterministic; real scheme is
-/// sha256(observation)[:12]. Stable for a given seed → idempotent edge ids.
+/// Content id: `b_` + first 12 hex chars of sha256(seed) — the ROADMAP "real content ids"
+/// scheme, replacing the SipHash placeholder (same `b_` + 12-hex shape, so old and new ids
+/// coexist; ids are opaque and the store is append-only, so nothing re-keys). The id hashes
+/// the OBSERVATION (callers seed with claim + txn_time, or a full idempotency key for
+/// derived beliefs like promotes/edges), so re-observing the same fact is a NEW belief and
+/// dedup stays a recall-time clustering problem (the Reducer), not an ingest-time identity
+/// problem. Stable for a given seed → idempotent edge/promote ids, exactly as before.
 pub fn content_id(seed: &str) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    seed.hash(&mut h);
-    format!("b_{:012x}", h.finish() & 0xffff_ffff_ffff)
+    format!("b_{}", &hash::sha256_hex(seed.as_bytes())[..12])
 }
 
 pub fn iso_now() -> String {
@@ -888,6 +930,25 @@ judge: A restates B\ncarries: the load-bearing mechanism\n",
         r2.edges.push(Edge { kind: EdgeKind::Retracts, target: "a2".into() });
         let g = Graph::from_beliefs(vec![th, content("a1", "ax1"), content("a2", "ax2"), r1, r2]);
         assert!(g.defeated().contains("th"), "all justifications dead → thm OUT");
+    }
+
+    #[test]
+    fn parses_the_valid_time_window_and_checks_validity() {
+        let md = "---\nid: b_v\nslug: cap-3-months\nclaim:\n  kind: text\n  text: >-\n    The API cap was 3 months.\n\
+provenance:\n  txn_time: 2026-06-04T12:00:00Z\n  valid_time:\n    start: 2020-12-13\n    end: 2024-03-09\n---\n";
+        let b = Belief::parse(md).expect("parses");
+        assert_eq!(b.valid_from.as_deref(), Some("2020-12-13"));
+        assert_eq!(b.valid_until.as_deref(), Some("2024-03-09"));
+        assert!(!b.valid_at("2020-01-01"), "before the window");
+        assert!(b.valid_at("2021-06-01T23:59:59.999Z"), "inside (datetime input ok)");
+        assert!(!b.valid_at("2025-01-01"), "after the window — historical, not wrong");
+        // `valid_time: null` → no window → claims no dated validity
+        let plain = Belief::parse(
+            "---\nid: b_p\nslug: p\nclaim:\n  kind: text\n  text: >-\n    c\nprovenance:\n  txn_time: 2026-01-01T00:00:00Z\n  valid_time: null\n---\n",
+        )
+        .unwrap();
+        assert!(plain.valid_from.is_none() && plain.valid_until.is_none());
+        assert!(plain.valid_at("1990-01-01") && plain.valid_at("2999-01-01"));
     }
 
     #[test]
