@@ -36,13 +36,17 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   - `src/bin/recall.rs` — recall harness.
 - **`crates/memory-cli`** (`mem`) — the user surface. Subcommands: `remember`, `recall`, `expand`,
   `ask` (the one LLM-on-read path), `forget` (reified `retracts` edge, non-destructive), `promote`
-  (lift a branch's beliefs into repo canon), `consolidate` (LLM judge draws edges), `reduce`
-  (duplicate `same-as` fold), `dream` (REM/novelty bridge pass), `review` (frontier-adjudication queue
+  (lift a branch's beliefs into repo canon), `consolidate` (LLM judge draws edges; detached by
+  default, `--fg` = inline), `reduce` (duplicate `same-as` fold), `dream` (REM/novelty bridge pass), `review` (frontier-adjudication queue
   for candidate `depends_on`), `link <s> <kind> <o>` (author a durable `frontier@1` edge), `debt`
   (known-debt query + `blocked_on` auto-resurface), `onboard [--tier2]`, **`world [list|show|diff]`**
   (parallel realities from `worlds.json` in/beside the store — corpus format verbatim), **`relive
   <as-of-time>`** (bitemporal replay diffed vs now), **`ask --world <w>`** (world-relative reduction:
-  suppress→refixpoint + the world's assumption threaded into the prompt). Runs per-invocation in a repo
+  suppress→refixpoint + the world's assumption threaded into the prompt), `worker [--now]` (the lazy
+  background tier, `src/worker.rs`: writes trip a due-check that kicks a detached `mem __worker` —
+  consolidate + weekly dream piggyback; `recall`/`ask` surface a one-line summary; every pass is
+  metered into `.worker-metrics.jsonl` — wall/chat/embed costs via `memory_embed::counters()`, BOTH
+  chat providers included; kill switch `MEM_NO_BG=1` / `worker.enabled=false`). Runs per-invocation in a repo
   so it sees LOCAL git state → derives the active scope. Commands print the next step (legible without
   docs). `src/bin/eval-qa.rs` is the **template harness** for any corpus+LLM evaluation.
   `src/bin/eval-worlds.rs` is the **worlds keystone**: deterministic V3-reachability re-proof over

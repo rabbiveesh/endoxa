@@ -1,8 +1,9 @@
 # Lazy background work — daemon-less opportunistic consolidation
 
-Status: **proposal + design spec** · 2026-06-15 · the idea is "don't run a worker daemon; let the
-CLI notice when maintenance is due and kick it off detached." This doc is the prompt/spec to build
-from, with my assessment up front.
+Status: **SHIPPED (first cut)** · 2026-07-30 · originally a proposal + design spec (2026-06-15):
+"don't run a worker daemon; let the CLI notice when maintenance is due and kick it off detached."
+The mechanism below is implemented in `memory-cli/src/worker.rs`; deltas from the spec and the
+open-question decisions are recorded at the bottom (§ "As built").
 
 ## The idea (one paragraph)
 
@@ -128,3 +129,81 @@ mem recall "<q>" (next time)     # surfaces: "🛠 background consolidate ran 3m
 - Composes with the frontier-review surface (`mem review`): a background `consolidate` draws
   `supports`/`refines`, and the `⚑ N for review` nudge tells the agent there are candidate
   `depends_on` to adjudicate — so opportunistic linking feeds on-demand frontier adjudication.
+
+## As built (2026-07-30, `memory-cli/src/worker.rs`)
+
+The shipped first cut follows the mechanism above with these deltas and decisions:
+
+- **Trigger points:** every store WRITE counts — `remember` (+1), `promote` (+promoted count),
+  `onboard --commit` (+committed count) — via `note_writes_and_kick`. Reads never trigger, per spec.
+- **Scope of a background run (spec open question → DECIDED):** the worker inherits the triggering
+  invocation's cwd and derives the SAME active scope, not store-wide. This is the spec's own reason
+  №1 taken seriously — "the trigger is the user already being in the right place" — and it prevents
+  a global pass from drawing edges between unrelated branch scopes. The pending-write counter is
+  drained only by a pass that actually consolidated targets, so a pass that finds nothing in scope
+  leaves the backlog pending and repo A's writes re-trigger when you're next active in A. Known
+  imprecision: the counter is store-global, so a pass in repo B that DOES have targets drains it
+  even when the pending writes were A's (harmless — consolidation is idempotent and newest-first;
+  per-scope counters are a later refinement if it ever bites).
+- **Tasks (spec open question → DECIDED):** `consolidate` opportunistic (bounded by the pending
+  write count, capped at `worker.max_targets`); `dream` piggybacks on a healthy pass at its own much
+  longer cadence (`worker.dream_interval_mins`, default weekly, `--limit 4`); `reduce` stays manual.
+- **Budget cap (spec open question → DECIDED):** per-pass targets = `min(pending_writes,
+  max_targets)` — never a marathon. A capped pass does NOT catch up across passes (selection is
+  newest-first with no cursor; re-running would re-judge the same newest beliefs at real LLM cost),
+  so the run summary surfaces the tail explicitly: `capped at 12; cover the rest: mem consolidate
+  --limit 40`. The worker keeps the frontier fresh; going deep stays a deliberate command. A
+  consolidation cursor is the noted later refinement if this bites.
+- **Manual control surface (spec open question → DECIDED):** `mem worker` (status: pending count,
+  last run, lock holder, due-now, log path) and `mem worker --now` (forced detached pass, still
+  lock-serialized).
+- **Lock:** a **pidfile** (O_EXCL create, holder pid inside, dropped on exit), not `flock` — zero
+  new dependencies, in the shell-out-to-curl spirit. Stale locks (holder dead per `/proc`, or older
+  than 6 h) are stolen; the theoretical double-steal race is accepted because edge commits are
+  idempotent (a rare double worker wastes LLM budget, corrupts nothing).
+- **Detach:** re-exec `current_exe()` as hidden `mem __worker` with stdio → `.worker.log` and
+  `process_group(0)` (std, no libc `setsid` needed) so the terminal's Ctrl-C never reaches it.
+- **State:** `.worker-state.json` — epoch-second timestamps (exact u64 parse; the f32 ledger parser
+  would corrupt epochs), atomic tmp+rename replace, `writes_since` drained by subtraction so writes
+  landing mid-run stay pending. Every read-modify-write (foreground count, surfacing, the worker's
+  final update) is serialized by a `.worker-state.lock` micro-lock (µs hold; a contender spins
+  ~250 ms then proceeds unlocked rather than ever hanging the foreground). A FAILED pass advances
+  `last_run` (min-interval throttles retries; the failure is surfaced honestly) but does NOT drain
+  the backlog, so the work retries; only a killed run re-triggers immediately. `.worker.log`
+  rotates once past ~1 MB (one old generation kept).
+- **First-write anchor:** creating the state file stamps `last_run`/`last_dream` = now, so a
+  brand-new store doesn't fork a surprise LLM pass on write №1; intervals count from first use.
+- **Knob names:** `worker.enabled`, `worker.consolidate_after_writes`, `worker.min_interval_mins`,
+  `worker.max_interval_mins`, `worker.dream_interval_mins`, `worker.max_targets` (integer minutes,
+  not duration strings — the hand-rolled config layer stays dumb), plus env `MEM_NO_BG=1`. The
+  multi-word knobs are config.toml-only: the `MEM_*` env layer's `_` separator can't address them
+  (`MEM_WORKER_MAX_TARGETS` → `worker.max.targets`, silently ignored).
+- **Not built (yet):** the "don't kick when the foreground command itself uses the LLM" refinement
+  (risk №1) — moot today because none of the WRITE commands that kick are LLM-on-read, and the lock
+  already serializes workers; revisit if `ask` ever becomes a trigger point.
+
+## Instrumentation (2026-07-30, second cut)
+
+Every pass — background or foreground — is now **measured**, and deliberate consolidation is
+**backgrounded by default**:
+
+- **Metrics ledger** `$MEMORY_DIR/.worker-metrics.jsonl`: one append-only JSON line per pass with
+  what happened (`job`, `trigger`, `scopes`, `pending`, `targets`, `new_edges`, `review`, `probes`,
+  `bridges`, `ok`, `error`) and what it cost (`duration_ms`, `chat_calls`, `chat_ms`,
+  `embed_texts`). Costs come from process-local atomic counters in `memory-embed` — the single
+  choke point every LLM touch flows through — snapshotted before/after each pass (attempts count
+  even on failure). Disposable sidecar, never read on a hot path; `mem worker` prints lifetime
+  totals per job + the recent tail, deeper analysis is jq territory.
+- **`trigger` distinguishes the three paths:** `worker` (due-check kick), `cli` (detached
+  `mem consolidate`), `cli-fg` (inline `--fg` runs and `mem dream`).
+- **`mem consolidate` detaches by default**: it re-execs the same hidden `__worker` body with the
+  caller's `--limit` (no dream piggyback), so a deliberate deep pass gets the identical lock,
+  log, state-drain, surfacing, and metrics treatment. `--fg` (or a disabled tier: MEM_NO_BG /
+  `worker.enabled=false`) keeps the old synchronous path — CI/scripts stay predictable — and the
+  inline path still records its metric and drains the backlog it covered.
+- **`mem dream` stays foreground** (it's an observability artifact that prints its bridge rate)
+  but is metered, and a deliberate dream resets the worker's weekly piggyback cadence.
+- **Lock-held skip is loud, not silent:** a deliberate detached `mem consolidate` that loses the
+  worker lock (a due-check pass is mid-flight) surfaces `consolidate SKIPPED … rerun: mem
+  consolidate --limit N` on the next read and records an `ok:false` ledger line — the caller's
+  explicit limit must not be dropped invisibly. A skipped due-check kick stays silent (fungible).
