@@ -16,3 +16,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      # worlds keystone: deterministic (no LLM) — the frontier substrate for
+      # world-relative reduction must hold on every worlds.json corpus
+      - run: cargo run -p memory-cli --bin eval-worlds

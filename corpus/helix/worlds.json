@@ -15,7 +15,7 @@
         "main": "No-op (only deletes; never aborts) — verdict2 reverted the abort change, reinstating the original behaviour.",
         "shell-muscle-memory": "Aborts the prompt — verdict1 stands because the revert (verdict2) is suppressed under the muscle-memory assumption."
       },
-      "status": "TARGET fixture for world-relative reduction — NOT demonstrated. Also exercises non-monotonic, frontier-relative defeat: on `main` verdict2 defeats verdict1, which REINSTATES the original; the dissent world keeps verdict1 live."
+      "status": "DEMONSTRATED 2026-08-03: eval-worlds --llm passed this fixture in both worlds (reducer claude:sonnet via the pluggable chat-provider seam; blind letter-labeled LLM-judge grading — ollama embeddings unavailable that run; deterministic reachability in CI). Also exercises non-monotonic, frontier-relative defeat: on `main` verdict2 defeats verdict1, which REINSTATES the original; the dissent world keeps verdict1 live."
     }
   ]
 }

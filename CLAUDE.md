@@ -28,7 +28,10 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   `Belief::parse` (hand-rolled zero-dep frontmatter parser), `EdgeKind` + `Semantic` registry, and
   **`defeated()`** — the frontier resolver (alternating fixpoint; two defeat modes: `supersedes` is
   monotonic version-chain, `adjudicates`/`retracts` are non-monotonic verdicts → verdict-of-a-verdict
-  reinstates). The `Linker` trait + value types live here (impls in `memory-consolidate`).
+  reinstates). **Worlds machinery**: `World` + `defeated_with(suppress)`/`defeated_in(world)`
+  (suppress-then-refixpoint — V3's load-bearing op), `as_of(txn_time)` (bitemporal replay),
+  `frontier_flips` (world/relive diff). The `Linker` trait + value types live here (impls in
+  `memory-consolidate`).
   - `src/bin/eval.rs` — deterministic keystone eval: frontier vs naive refuted-list (no LLM).
   - `src/bin/recall.rs` — recall harness.
 - **`crates/memory-cli`** (`mem`) — the user surface. Subcommands: `remember`, `recall`, `expand`,
@@ -36,17 +39,28 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   (lift a branch's beliefs into repo canon), `consolidate` (LLM judge draws edges; detached by
   default, `--fg` = inline), `reduce` (duplicate `same-as` fold), `dream` (REM/novelty bridge pass), `review` (frontier-adjudication queue
   for candidate `depends_on`), `link <s> <kind> <o>` (author a durable `frontier@1` edge), `debt`
-  (known-debt query + `blocked_on` auto-resurface), `onboard [--tier2]`, `worker [--now]` (the lazy
+  (known-debt query + `blocked_on` auto-resurface), `onboard [--tier2]`, **`world [list|show|diff]`**
+  (parallel realities from `worlds.json` in/beside the store — corpus format verbatim), **`relive
+  <as-of-time>`** (bitemporal replay diffed vs now), **`ask --world <w>`** (world-relative reduction:
+  suppress→refixpoint + the world's assumption threaded into the prompt), `worker [--now]` (the lazy
   background tier, `src/worker.rs`: writes trip a due-check that kicks a detached `mem __worker` —
   consolidate + weekly dream piggyback; `recall`/`ask` surface a one-line summary; every pass is
-  metered into `.worker-metrics.jsonl` — wall/chat/embed costs via `memory_embed::counters()`;
-  kill switch `MEM_NO_BG=1` / `worker.enabled=false`). Runs per-invocation in a repo
+  metered into `.worker-metrics.jsonl` — wall/chat/embed costs via `memory_embed::counters()`, BOTH
+  chat providers included; kill switch `MEM_NO_BG=1` / `worker.enabled=false`). Runs per-invocation in a repo
   so it sees LOCAL git state → derives the active scope. Commands print the next step (legible without
   docs). `src/bin/eval-qa.rs` is the **template harness** for any corpus+LLM evaluation.
+  `src/bin/eval-worlds.rs` is the **worlds keystone**: deterministic V3-reachability re-proof over
+  every worlds.json corpus (CI-able, no LLM), plus `--llm` for the N6 fixture-divergence graduation gate.
 - **`crates/memory-embed`** — ollama-backed embeddings (shells to `curl`, no HTTP crate) + on-disk
-  vector cache. `Ollama::from_env()`, `.embed()`, `chat_json(url,model,system,user)`,
-  `load_cache(dir,model)` / `save_cache`. Embed model `nomic-embed-text` (asymmetric: docs prefixed
-  `search_document: `, queries `search_query: `).
+  vector cache + **the pluggable chat-provider seam**. `Ollama::from_env()`, `.embed()`,
+  `chat_json(url,model,system,user)`, `load_cache(dir,model)` / `save_cache`. Embed model
+  `nomic-embed-text` (asymmetric: docs prefixed `search_document: `, queries `search_query: `).
+  **Chat providers dispatch on the model ref** (`parse_model_ref`): `claude:sonnet` /
+  `claude-code[:m]` → the Claude Code CLI (`claude -p`, tools off, neutral cwd, `CLAUDE_BIN`/
+  `CLAUDE_CHAT_ARGS` env); `ollama:<m>` or any bare ref (e.g. `qwen2.5:7b`) → ollama. Since every
+  LLM call goes through `chat_json` and every caller reads its model from env, a provider switch
+  is just e.g. `JUDGE_MODEL=claude:sonnet` / `ASK_MODEL=claude:opus` — no code changes. Embeddings
+  stay ollama-only (Claude Code has no embedding endpoint).
 - **`crates/memory-consolidate`** — Linker impls (proximity heuristic + LLM judge), Reducer
   (duplicate fold), NoveltyDreamer, the `Consolidator` (SOLE edge writer — linkers only *propose*).
 - **`crates/memory-onboard`** — deterministic git-history harvest → lead files → judge-drafted claims.
@@ -60,8 +74,12 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   - **`worlds.json`** (helix + composr only): `{ worlds:{name:{default?,assumption,suppress?:[slug]}},
     reduction_fixtures:[{query,neighborhood:[slug],expected_by_world:{world:text},status}] }`. A
     world suppresses defeating edges from `suppress` slugs and recomputes the frontier → parallel
-    realities. `reduction_fixtures` are the GOLD divergent answers (the reducer-behaves-world-
-    relatively demo is a TARGET, not yet demonstrated). Reference resolver: `corpus/_worlds.py`.
+    realities. `reduction_fixtures` are the GOLD divergent answers — **DEMONSTRATED 2026-08-03**:
+    `eval-worlds --llm` passed 6/6 fixture×world cells with `ASK_MODEL=claude:sonnet` (blind
+    LLM-judge grading; see next-experiments.md N6 for caveats). The deterministic substrate
+    (dissent beliefs reachable per world) is verified in-tree by `eval-worlds` (in CI).
+    Reference resolver: `corpus/_worlds.py` (NB: it is simplified — no `retracts`, and
+    non-monotonic supersedes; core's `defeated()` is the truth).
   - Corpora are append-only: never patch a belief, append a correction that defeats it.
 - **Real fact store** `~/.local/share/agentic-memory/beliefs/` (= `$MEMORY_DIR`, default) — the
   user's LIVE 330 beliefs + `.embeddings.json`. **READ-ONLY in experiments.** Real beliefs are
@@ -80,8 +98,10 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
 ## Build / run / LLM
 
 - `cargo build --workspace` ; `cargo run -q -p memory-core --bin eval` (deterministic, fast).
-- LLM evals need **ollama** (confirmed available): `qwen2.5:7b` (better, ~seconds/call on CPU),
-  `qwen2.5:3b` (faster), `nomic-embed-text` (embeddings). `JUDGE_MODEL`/`ASK_MODEL` env override.
+- LLM evals need a chat provider: **ollama** (`qwen2.5:7b` better ~seconds/call on CPU,
+  `qwen2.5:3b` faster) or **Claude Code** via provider-prefixed model refs (`claude:sonnet`,
+  `claude:haiku`, bare `claude` = CLI default). `JUDGE_MODEL`/`ASK_MODEL`/`TIER2_MODEL`/
+  `GRADE_MODEL` env take either form. Embeddings always need ollama (`nomic-embed-text`).
 - CI: `cargo test` on push/PR (`.github/workflows/ci.yml`).
 
 ## Design docs & open questions

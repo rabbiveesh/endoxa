@@ -6,11 +6,12 @@
 //! LLM into core). First cut is hacky above L0; the belief *file format* is the durable part.
 
 pub mod confidence;
+pub mod hash;
 pub use confidence::StructuralConfidence;
+pub use hash::{sha256, sha256_hex};
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -185,6 +186,13 @@ pub struct Belief {
     /// ISO-8601 transaction time (when recorded). Lexically ordered. Lets the judge only
     /// propose supersedes from the genuinely-newer belief.
     pub txn_time: String,
+    /// Bitemporal validity window: when the claim was true IN THE WORLD, as opposed to when
+    /// we recorded it (`txn_time`). ISO dates, lexically ordered; either bound may be absent
+    /// (`valid_time: null` → both None = "no dated validity claimed"). A belief with
+    /// `valid_until` in the past is not *wrong*, it's *historical* — `mem relive` uses this
+    /// to separate "we believed it then" from "and it was still true of the world then".
+    pub valid_from: Option<String>,
+    pub valid_until: Option<String>,
     /// Known-debt envelope (§3b), present iff this belief records a compromise. Orthogonal to
     /// confidence: a deficient belief is still true and current — it just should change.
     pub deficiency: Option<Deficiency>,
@@ -195,6 +203,25 @@ pub struct Belief {
 }
 
 impl Belief {
+    /// Was this claim — per its declared validity window — true of the world at `date`?
+    /// (ISO date or datetime; only date parts are compared.) A belief with no window claims
+    /// no dated validity → true. This is the bitemporal second axis: `as_of` answers "did we
+    /// BELIEVE it then", `valid_at` answers "was it true OF THE WORLD then".
+    pub fn valid_at(&self, date: &str) -> bool {
+        let d = &date[..date.len().min(10)];
+        if let Some(from) = &self.valid_from {
+            if d < &from[..from.len().min(10)] {
+                return false;
+            }
+        }
+        if let Some(until) = &self.valid_until {
+            if d > &until[..until.len().min(10)] {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Parse one belief markdown file (YAML-ish frontmatter). Hand-rolled, zero-dep.
     pub fn parse(text: &str) -> Option<Belief> {
         let mut fm: Vec<&str> = Vec::new();
@@ -303,9 +330,21 @@ impl Belief {
                             rel_obj = v.trim().split_whitespace().next().unwrap_or("").to_string();
                         }
                     }
+                    // `valid_time` nests one level deeper (start:/end: at indent 4); those two
+                    // key names appear nowhere else under provenance, so flat matching is safe.
                     "provenance" => {
                         if let Some(v) = trimmed.strip_prefix("txn_time:") {
                             b.txn_time = v.trim().to_string();
+                        } else if let Some(v) = trimmed.strip_prefix("start:") {
+                            let v = v.trim();
+                            if !v.is_empty() && v != "null" && b.valid_from.is_none() {
+                                b.valid_from = Some(v.to_string());
+                            }
+                        } else if let Some(v) = trimmed.strip_prefix("end:") {
+                            let v = v.trim();
+                            if !v.is_empty() && v != "null" && b.valid_until.is_none() {
+                                b.valid_until = Some(v.to_string());
+                            }
                         }
                     }
                     // known-debt envelope (§3b): free-text values, single line each.
@@ -434,12 +473,15 @@ pub trait Linker {
 
 // --- ids + time (shared by the surface so edge-beliefs get stable ids) -------------------
 
-/// Placeholder content id (low 48 bits of std SipHash). Deterministic; real scheme is
-/// sha256(observation)[:12]. Stable for a given seed → idempotent edge ids.
+/// Content id: `b_` + first 12 hex chars of sha256(seed) — the ROADMAP "real content ids"
+/// scheme, replacing the SipHash placeholder (same `b_` + 12-hex shape, so old and new ids
+/// coexist; ids are opaque and the store is append-only, so nothing re-keys). The id hashes
+/// the OBSERVATION (callers seed with claim + txn_time, or a full idempotency key for
+/// derived beliefs like promotes/edges), so re-observing the same fact is a NEW belief and
+/// dedup stays a recall-time clustering problem (the Reducer), not an ingest-time identity
+/// problem. Stable for a given seed → idempotent edge/promote ids, exactly as before.
 pub fn content_id(seed: &str) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    seed.hash(&mut h);
-    format!("b_{:012x}", h.finish() & 0xffff_ffff_ffff)
+    format!("b_{}", &hash::sha256_hex(seed.as_bytes())[..12])
 }
 
 pub fn iso_now() -> String {
@@ -458,6 +500,29 @@ pub fn iso_now() -> String {
     let (y, m, d) = (y + if m <= 2 { 1 } else { 0 }, m, d);
     let sod = secs % 86400;
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{millis:03}Z", sod / 3600, (sod % 3600) / 60, sod % 60)
+}
+
+// --- worlds (design §5 / V3) -------------------------------------------------------------
+//
+// A world is a NAMED SET OF HEADS over the one shared, immutable belief DAG: an `assumption`
+// (its identity — the tie-breaker a reducer needs to *select* among co-live beliefs) plus a
+// `suppress` set (belief refs whose *defeating* edges are dropped before frontier resolution,
+// so the beliefs they defeated stay live). V3 measured that BOTH halves are load-bearing:
+// bi-temporal soft-delete alone reconstructs a dissent world 0/3; suppress-then-refixpoint
+// reinstates it 3/3, and the assumption is what lets the L3 reducer pick the dissent answer.
+
+/// A parallel reality over the shared belief DAG. Pure value type — loading (worlds.json)
+/// lives in the surface layer; core only *resolves* a world into a frontier.
+#[derive(Debug, Clone, Default)]
+pub struct World {
+    pub name: String,
+    /// The world's identity: the working assumption under which its frontier is the truth.
+    /// Threaded into the L3 reduction prompt so the reducer can select world-relatively.
+    pub assumption: String,
+    /// Belief refs (slug or id) whose defeating edges are dropped on this world's frontier.
+    /// Suppressing the RELATION (the defeat), not the proposition — the belief itself stays.
+    pub suppress: Vec<String>,
+    pub is_default: bool,
 }
 
 /// An in-memory belief graph for one corpus / world `main`.
@@ -577,6 +642,18 @@ impl Graph {
     ///    nothing, so a verdict-of-a-verdict (or forgetting a retraction) reinstates the original.
     ///    A belief defeated *by a verdict* fires nothing.
     pub fn defeated(&self) -> HashSet<Id> {
+        self.defeated_with(&HashSet::new())
+    }
+
+    /// **World-relative frontier resolution** (design §5 / V3): `defeated()` with a suppress
+    /// set. A defeating edge does NOT bite when its SOURCE is suppressed — for an inline edge
+    /// the source is the belief carrying it; for a reified edge-belief either the relation's
+    /// `subject` (the usual world author's handle) or the carrier edge-belief itself (to
+    /// suppress one specific relation) may be named. Suppression drops the DEFEAT, never the
+    /// belief: everything stays loaded, reachable, and relivable — the fixpoint just re-runs
+    /// without those edges, which is exactly how a dissent world reinstates what `main` defeated.
+    /// `suppress` holds resolved belief IDS — use `resolve_suppress` on a `World`'s refs first.
+    pub fn defeated_with(&self, suppress: &HashSet<Id>) -> HashSet<Id> {
         let mut defeated: HashSet<Id> = HashSet::new(); // all defeated (supersession OR verdict)
         let mut by_verdict: HashSet<Id> = HashSet::new(); // defeated by a non-monotonic kind
 
@@ -610,21 +687,24 @@ impl Graph {
             for b in &self.beliefs {
                 // `supersedes` (monotonic): fires unless this belief was VERDICT-defeated — a
                 // supersession-defeated belief keeps superseding its own targets (chain persists).
-                if !by_verdict.contains(&b.id) {
+                // A SUPPRESSED source (world semantics) never fires its defeats at all.
+                if !by_verdict.contains(&b.id) && !suppress.contains(&b.id) {
                     for e in &b.edges {
                         if matches!(e.kind, EdgeKind::Supersedes) && self.id_index.contains_key(&e.target) {
                             next.insert(e.target.clone());
                         }
                     }
                     if let Some(r) = &b.relation {
-                        if matches!(r.kind, EdgeKind::Supersedes) && self.id_index.contains_key(&r.object) {
+                        if matches!(r.kind, EdgeKind::Supersedes) && self.id_index.contains_key(&r.object)
+                            && !suppress.contains(&r.subject)
+                        {
                             next.insert(r.object.clone());
                         }
                     }
                 }
                 // verdicts (`adjudicates`/`retracts`/any other defeating kind): non-monotonic —
-                // fire only if this belief is fully current.
-                if !defeated.contains(&b.id) {
+                // fire only if this belief is fully current (and not world-suppressed).
+                if !defeated.contains(&b.id) && !suppress.contains(&b.id) {
                     for e in &b.edges {
                         if e.kind.is_defeating() && !matches!(e.kind, EdgeKind::Supersedes)
                             && self.id_index.contains_key(&e.target)
@@ -636,6 +716,7 @@ impl Graph {
                     if let Some(r) = &b.relation {
                         if r.kind.is_defeating() && !matches!(r.kind, EdgeKind::Supersedes)
                             && self.id_index.contains_key(&r.object)
+                            && !suppress.contains(&r.subject)
                         {
                             next.insert(r.object.clone());
                             next_v.insert(r.object.clone());
@@ -685,6 +766,48 @@ impl Graph {
     pub fn current(&self) -> Vec<&Belief> {
         let d = self.defeated();
         self.beliefs.iter().filter(|b| !d.contains(&b.id)).collect()
+    }
+
+    /// Resolve a `World`'s suppress refs (slug or id) → canonical ids for `defeated_with`.
+    /// Unknown refs are dropped silently — a world file may name beliefs outside this scope.
+    pub fn resolve_suppress(&self, refs: &[String]) -> HashSet<Id> {
+        refs.iter().filter_map(|r| self.resolve_ref(r)).collect()
+    }
+
+    /// The frontier a `World` sees: suppress-then-refixpoint (V3's load-bearing operation).
+    pub fn defeated_in(&self, world: &World) -> HashSet<Id> {
+        self.defeated_with(&self.resolve_suppress(&world.suppress))
+    }
+
+    /// **Bitemporal reliving**: the belief graph as it stood at transaction time `t` — only
+    /// beliefs recorded at or before `t` (lexical ISO-8601 compare) exist in it. Beliefs with
+    /// no `txn_time` (hand-authored, undated) are kept: they cannot be placed after `t`, and
+    /// dropping them would make replay lie by omission. Resolve the returned graph's frontier
+    /// to answer "what did we believe then?" — later supersessions/verdicts don't exist yet,
+    /// so defeats that postdate `t` genuinely un-happen, which is the point of reliving.
+    pub fn as_of(&self, t: &str) -> Graph {
+        let sub: Vec<Belief> = self
+            .beliefs
+            .iter()
+            .filter(|b| b.txn_time.is_empty() || b.txn_time.as_str() <= t)
+            .cloned()
+            .collect();
+        Graph::from_beliefs(sub)
+    }
+
+    /// Divergence between two frontiers over THIS graph: content beliefs whose live-status
+    /// differs, as `(belief, live_in_a, live_in_b)`. The world-diff / relive-diff primitive.
+    pub fn frontier_flips<'a>(
+        &'a self,
+        defeated_a: &HashSet<Id>,
+        defeated_b: &HashSet<Id>,
+    ) -> Vec<(&'a Belief, bool, bool)> {
+        self.content()
+            .filter_map(|b| {
+                let (la, lb) = (!defeated_a.contains(&b.id), !defeated_b.contains(&b.id));
+                (la != lb).then_some((b, la, lb))
+            })
+            .collect()
     }
 }
 
@@ -807,6 +930,113 @@ judge: A restates B\ncarries: the load-bearing mechanism\n",
         r2.edges.push(Edge { kind: EdgeKind::Retracts, target: "a2".into() });
         let g = Graph::from_beliefs(vec![th, content("a1", "ax1"), content("a2", "ax2"), r1, r2]);
         assert!(g.defeated().contains("th"), "all justifications dead → thm OUT");
+    }
+
+    #[test]
+    fn parses_the_valid_time_window_and_checks_validity() {
+        let md = "---\nid: b_v\nslug: cap-3-months\nclaim:\n  kind: text\n  text: >-\n    The API cap was 3 months.\n\
+provenance:\n  txn_time: 2026-06-04T12:00:00Z\n  valid_time:\n    start: 2020-12-13\n    end: 2024-03-09\n---\n";
+        let b = Belief::parse(md).expect("parses");
+        assert_eq!(b.valid_from.as_deref(), Some("2020-12-13"));
+        assert_eq!(b.valid_until.as_deref(), Some("2024-03-09"));
+        assert!(!b.valid_at("2020-01-01"), "before the window");
+        assert!(b.valid_at("2021-06-01T23:59:59.999Z"), "inside (datetime input ok)");
+        assert!(!b.valid_at("2025-01-01"), "after the window — historical, not wrong");
+        // `valid_time: null` → no window → claims no dated validity
+        let plain = Belief::parse(
+            "---\nid: b_p\nslug: p\nclaim:\n  kind: text\n  text: >-\n    c\nprovenance:\n  txn_time: 2026-01-01T00:00:00Z\n  valid_time: null\n---\n",
+        )
+        .unwrap();
+        assert!(plain.valid_from.is_none() && plain.valid_until.is_none());
+        assert!(plain.valid_at("1990-01-01") && plain.valid_at("2999-01-01"));
+    }
+
+    #[test]
+    fn suppression_reinstates_a_superseded_belief() {
+        // v2 supersedes v1. On `main` v1 is defeated; a world suppressing v2's defeats relives v1.
+        let mut v2 = content("v2", "claim-v2");
+        v2.edges.push(Edge { kind: EdgeKind::Supersedes, target: "v1".into() });
+        let g = Graph::from_beliefs(vec![content("v1", "claim-v1"), v2]);
+        assert!(g.defeated().contains("v1"), "main: v1 superseded");
+        let w = World {
+            name: "dissent".into(),
+            assumption: "v1 was right".into(),
+            suppress: vec!["claim-v2".into()], // by SLUG — resolve_suppress canonicalizes
+            is_default: false,
+        };
+        let d = g.defeated_in(&w);
+        assert!(!d.contains("v1"), "suppressing v2's defeat relives v1");
+        assert!(!d.contains("v2"), "the suppressed belief itself stays live — only its DEFEAT drops");
+    }
+
+    #[test]
+    fn suppression_composes_with_verdict_reinstatement() {
+        // The helix r3 shape: verdict1 adjudicates original; verdict2 adjudicates verdict1.
+        // main: verdict2 kills verdict1, which REINSTATES original.
+        // dissent (suppress verdict2): verdict1 lives → original is defeated again.
+        let mut v1 = content("v1", "verdict1");
+        v1.edges.push(Edge { kind: EdgeKind::Adjudicates, target: "orig".into() });
+        let mut v2 = content("v2", "verdict2");
+        v2.edges.push(Edge { kind: EdgeKind::Adjudicates, target: "v1".into() });
+        let g = Graph::from_beliefs(vec![content("orig", "original"), v1, v2]);
+
+        let main = g.defeated();
+        assert!(main.contains("v1") && !main.contains("orig"), "main: verdict-of-verdict reinstates");
+
+        let w = World { name: "w".into(), suppress: vec!["verdict2".into()], ..World::default() };
+        let d = g.defeated_in(&w);
+        assert!(!d.contains("v1"), "dissent: verdict1 relives");
+        assert!(d.contains("orig"), "dissent: original is defeated by the relived verdict1");
+    }
+
+    #[test]
+    fn suppression_reaches_reified_relations_via_subject_or_carrier() {
+        // A reified supersedes edge-belief (carrier `e`): [b_new] supersedes [b_old].
+        let mut carrier = content("e", "rel-supersede");
+        carrier.relation = Some(Relation {
+            kind: EdgeKind::Supersedes,
+            subject: "b_new".into(),
+            object: "b_old".into(),
+        });
+        let g = Graph::from_beliefs(vec![content("b_new", "new"), content("b_old", "old"), carrier]);
+        assert!(g.defeated().contains("b_old"));
+        // suppress by the relation's SUBJECT (the world author's usual handle)…
+        let by_subject = g.defeated_with(&g.resolve_suppress(&["new".into()]));
+        assert!(!by_subject.contains("b_old"), "suppressing the subject drops the reified defeat");
+        // …or by the carrier edge-belief itself (one specific relation)
+        let by_carrier = g.defeated_with(&g.resolve_suppress(&["rel-supersede".into()]));
+        assert!(!by_carrier.contains("b_old"), "suppressing the carrier drops the reified defeat");
+    }
+
+    #[test]
+    fn as_of_relives_the_pre_supersession_world() {
+        let mut v1 = content("v1", "cap-3-months");
+        v1.txn_time = "2026-01-10T00:00:00.000Z".into();
+        let mut v2 = content("v2", "cap-6-months");
+        v2.txn_time = "2026-03-01T00:00:00.000Z".into();
+        v2.edges.push(Edge { kind: EdgeKind::Supersedes, target: "v1".into() });
+        let undated = content("u", "undated"); // no txn_time → always present
+        let g = Graph::from_beliefs(vec![v1, v2, undated]);
+
+        let then = g.as_of("2026-02-01T00:00:00.000Z");
+        assert!(then.by_id("v2").is_none(), "v2 not yet recorded");
+        assert!(then.by_id("u").is_some(), "undated beliefs are kept");
+        assert!(!then.defeated().contains("v1"), "as-of Feb: v1 was still current");
+        assert!(g.defeated().contains("v1"), "now: v1 superseded");
+    }
+
+    #[test]
+    fn frontier_flips_reports_only_the_divergence() {
+        let mut v2 = content("v2", "claim-v2");
+        v2.edges.push(Edge { kind: EdgeKind::Supersedes, target: "v1".into() });
+        let g = Graph::from_beliefs(vec![content("v1", "claim-v1"), v2, content("s", "stable")]);
+        let a = g.defeated();
+        let b = g.defeated_with(&g.resolve_suppress(&["claim-v2".into()]));
+        let flips = g.frontier_flips(&a, &b);
+        assert_eq!(flips.len(), 1, "only v1 flips; v2 and stable are live in both");
+        let (belief, live_a, live_b) = flips[0];
+        assert_eq!(belief.id, "v1");
+        assert!(!live_a && live_b);
     }
 
     #[test]
