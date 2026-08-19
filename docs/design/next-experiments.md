@@ -186,10 +186,12 @@ on something only a human can resolve, so the autonomous pass stops here. The fo
   from downstream task-utility feedback (reified as a defeasible `useful_for` Annotate edge), strictly
   downstream of `defeated()`. Stolen from Zhou's *"A Bitter Lesson for Memory."* Gated on having
   task-outcome traces to learn from (same shape as the N5 data blocker).
-- **[lazy-background-work.md](lazy-background-work.md)** — daemon-less opportunistic consolidation:
-  the CLI checks if a worker pass (`consolidate`/`dream`) is due and kicks it off detached, instead
-  of an always-running daemon. Assessment + build spec. Fits the per-invocation / sleep-stage model;
-  the delivery mechanism for the existing NREM/REM linkers.
+- **[lazy-background-work.md](lazy-background-work.md)** — ✅ SHIPPED (2026-07-30): daemon-less
+  opportunistic consolidation. Writes (`remember`/`promote`/`onboard --commit`) trip a due-check
+  that kicks a detached `mem __worker` (pidfile lock, consolidate bounded by pending writes, weekly
+  `dream` piggyback); `recall`/`ask` surface a one-line summary; `mem worker [--now]` is the manual
+  surface. The delivery mechanism for the existing NREM/REM linkers — see the doc's "As built"
+  section for the open-question decisions (scope = triggering invocation's active scope, etc.).
 
 ## Housekeeping
 
