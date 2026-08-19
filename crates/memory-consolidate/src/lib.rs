@@ -165,13 +165,16 @@ impl Sweeper {
                         continue; // both predate the last completed scan — pair already enumerated
                     }
                 }
-                let sim = cosine(va, vb);
-                if sim < self.threshold {
-                    continue;
-                }
+                // ledger-skip BEFORE the cosine: on a partially-swept backlog the re-enumeration
+                // cost is dominated by 768-dim dot products, and a judged pair's verdict never
+                // changes — don't re-pay the flops to rediscover it (review finding).
                 let (older, newer) =
                     if a.txn_time < b.txn_time { (&a.id, &b.id) } else { (&b.id, &a.id) };
                 if skip.contains(&Self::pair_key(older, newer)) {
+                    continue;
+                }
+                let sim = cosine(va, vb);
+                if sim < self.threshold {
                     continue;
                 }
                 out.push(SweepCandidate { sim, older: older.to_string(), newer: newer.to_string() });
