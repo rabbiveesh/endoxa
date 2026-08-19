@@ -64,6 +64,172 @@ fn relation_belief_md(edge_id: &str, p: &LinkProposal, scope: &str) -> String {
     s
 }
 
+
+// --- the Sweeper: staleness detection over the WHOLE current frontier -------------------
+//
+// Born from the 2026-08-09 real-store audit (V8 in open-questions-eval.md): the live store
+// carried ~2.3x more SILENT rot than its entire marked defeat graph — 30 adversarially-verified
+// stale beliefs sat undefeated on the frontier vs 13 marked supersedes edges, because nothing
+// ever looked for supersession between beliefs that arrived through different sessions. The
+// per-write JudgmentLinker only sees the NEW belief's neighborhood; the Sweeper walks every
+// unlinked near-duplicate pair on the frontier, so drift accumulated across months is found.
+//
+// Why this succeeds where V7's from-scratch Linker failed (F1 <= 0.19): the task is CONSTRAINED
+// to the one judgment LLMs are good at — "given two near-duplicate claims where one is newer,
+// is the older one now misleading?" — instead of open-vocabulary edge drawing over all pairs.
+// Two gates, both load-bearing:
+//   1. a strict PROPOSER (defaults to INDEPENDENT when unsure), then
+//   2. an adversarial REFUTER told that retracting a true belief destroys information.
+// Only a pair that survives BOTH becomes a `supersedes` proposal (newer -> older). Measured on
+// the real store with claude:sonnet judges: 86% precision post-refuter.
+//
+// Safety model — automatic supersession WITHOUT losing history: the edge is an ordinary reified,
+// defeasible edge-belief (author `sweep@1`) committed through the Consolidator; the older belief
+// stays on disk, relivable, and one `mem forget <edge-slug>` reinstates it. Sweep verdicts are
+// remembered in a CLI-side ledger, so a human veto (forgetting a sweep edge) is durable — the
+// pair is never re-judged, hence never re-drawn. `sweep@1` is deliberately NOT in the CLI's
+// regenerable-authors list for exactly that reason.
+
+/// One candidate pair: two CURRENT, unlinked, near-duplicate content beliefs, time-ordered.
+#[derive(Debug, Clone)]
+pub struct SweepCandidate {
+    pub sim: f32,
+    pub older: String,
+    pub newer: String,
+}
+
+/// A judge's answer for one pair. `stale == true` means "the older belief now misleads".
+pub struct SweepVerdict {
+    pub stale: bool,
+    pub why: String,
+}
+
+/// Per-run accounting, printed by the CLI and recorded in eval notes.
+#[derive(Debug, Default)]
+pub struct SweepStats {
+    pub judged: usize,
+    pub independent: usize,
+    pub refuted: usize,
+    pub confirmed: usize,
+    pub errors: usize,
+}
+
+pub struct Sweeper {
+    /// Candidate gate: cosine similarity floor (0.80 measured as the useful knee on the real store).
+    pub threshold: f32,
+}
+
+impl Sweeper {
+    /// Stable ledger key for a pair — direction-normalized to (older, newer).
+    pub fn pair_key(older: &str, newer: &str) -> String {
+        format!("{older}|{newer}")
+    }
+
+    /// Deterministic candidate generation over the graph: all-pairs of CURRENT content beliefs
+    /// with cosine >= threshold, distinct txn_times (direction needs an order), and NO existing
+    /// edge between them in either direction (any kind — an existing relation means some linker
+    /// or human already considered the pair). `skip` is the ledger: pairs already judged.
+    /// Sorted by similarity, highest first (the strongest staleness candidates).
+    /// `watermark`: txn_time of the last COMPLETED full scan. Beliefs are immutable and their
+    /// embeddings content-keyed, so a pair where BOTH sides predate the watermark was already
+    /// enumerated then (either judged → ledger, or below threshold → still below). Skipping such
+    /// pairs makes steady-state candidate generation O(new × n) instead of O(n²) — the sweep's
+    /// answer to "the store keeps growing": each run only pays for pairs involving NEW beliefs.
+    pub fn candidates(
+        &self,
+        g: &Graph,
+        defeated: &std::collections::HashSet<String>,
+        vectors: &HashMap<String, Vec<f32>>,
+        skip: &std::collections::HashSet<String>,
+        watermark: Option<&str>,
+    ) -> Vec<SweepCandidate> {
+        let mut linked: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+        for (_b, r) in g.relations() {
+            linked.insert((r.subject.clone(), r.object.clone()));
+            linked.insert((r.object.clone(), r.subject.clone()));
+        }
+        let current: Vec<&Belief> = g
+            .content()
+            .filter(|b| !defeated.contains(&b.id) && !b.txn_time.is_empty())
+            .collect();
+        let mut out = Vec::new();
+        for (i, a) in current.iter().enumerate() {
+            let Some(va) = vectors.get(&a.id) else { continue };
+            for b in current.iter().skip(i + 1) {
+                let Some(vb) = vectors.get(&b.id) else { continue };
+                if a.txn_time == b.txn_time || linked.contains(&(a.id.clone(), b.id.clone())) {
+                    continue;
+                }
+                if let Some(w) = watermark {
+                    if a.txn_time.as_str() <= w && b.txn_time.as_str() <= w {
+                        continue; // both predate the last completed scan — pair already enumerated
+                    }
+                }
+                let sim = cosine(va, vb);
+                if sim < self.threshold {
+                    continue;
+                }
+                let (older, newer) =
+                    if a.txn_time < b.txn_time { (&a.id, &b.id) } else { (&b.id, &a.id) };
+                if skip.contains(&Self::pair_key(older, newer)) {
+                    continue;
+                }
+                out.push(SweepCandidate { sim, older: older.to_string(), newer: newer.to_string() });
+            }
+        }
+        out.sort_by(|x, y| y.sim.partial_cmp(&x.sim).unwrap_or(std::cmp::Ordering::Equal));
+        out
+    }
+
+    /// Judge candidates through the two gates. `propose` and `refute` take (older, newer) and
+    /// return None on judge error (the pair is left un-judged for a future run). Emits one
+    /// double-verified `supersedes` proposal (newer -> older) per confirmed pair; `record` is
+    /// called with (pair_key, verdict-str) for every completed judgment so the caller can
+    /// persist the ledger incrementally.
+    pub fn run(
+        &self,
+        g: &Graph,
+        cands: &[SweepCandidate],
+        propose: &mut dyn FnMut(&Belief, &Belief) -> Option<SweepVerdict>,
+        refute: &mut dyn FnMut(&Belief, &Belief) -> Option<SweepVerdict>,
+        record: &mut dyn FnMut(&str, &str, &str),
+    ) -> (Vec<LinkProposal>, SweepStats) {
+        let mut props = Vec::new();
+        let mut st = SweepStats::default();
+        for c in cands {
+            let (Some(older), Some(newer)) = (g.by_id(&c.older), g.by_id(&c.newer)) else { continue };
+            let key = Self::pair_key(&c.older, &c.newer);
+            let Some(p) = propose(older, newer) else { st.errors += 1; continue };
+            st.judged += 1;
+            if !p.stale {
+                st.independent += 1;
+                record(&key, "independent", &p.why);
+                continue;
+            }
+            let Some(r) = refute(older, newer) else { st.errors += 1; continue };
+            if !r.stale {
+                st.refuted += 1;
+                record(&key, "refuted", &r.why);
+                continue;
+            }
+            st.confirmed += 1;
+            record(&key, "confirmed", &p.why);
+            props.push(LinkProposal {
+                kind: EdgeKind::Supersedes,
+                subject: c.newer.clone(),
+                object: c.older.clone(),
+                confidence: Confidence::Strong, // double-verified: strict propose + hostile refute
+                rationale: format!(
+                    "sweep: {} (cos {:.2}; survived adversarial refute: {})",
+                    p.why, c.sim, r.why
+                ),
+                linker: "sweep@1".into(),
+            });
+        }
+        (props, st)
+    }
+}
+
 // --- the Reducer: deterministic duplicate-collapse -------------------------------------
 //
 // A SURFACING-stage pass, NOT a frontier defeat: a duplicate isn't false, just redundant, so the
@@ -859,5 +1025,146 @@ mod tests {
         assert_eq!(props[0].object, "b_near");
         assert_eq!(props[0].kind.as_str(), "relates-to");
         assert!(!props[0].kind.is_defeating(), "relates-to must not affect the frontier");
+    }
+}
+
+#[cfg(test)]
+mod sweeper_tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+
+    fn belief(id: &str, slug: &str, txn: &str) -> Belief {
+        Belief {
+            id: id.into(),
+            slug: slug.into(),
+            claim: format!("claim {slug}"),
+            txn_time: txn.into(),
+            ..Belief::default()
+        }
+    }
+    fn vecs(pairs: &[(&str, [f32; 2])]) -> HashMap<String, Vec<f32>> {
+        pairs.iter().map(|(id, v)| (id.to_string(), v.to_vec())).collect()
+    }
+    fn yes(why: &str) -> Option<SweepVerdict> { Some(SweepVerdict { stale: true, why: why.into() }) }
+    fn no(why: &str) -> Option<SweepVerdict> { Some(SweepVerdict { stale: false, why: why.into() }) }
+
+    #[test]
+    fn candidates_gate_on_similarity_direction_links_and_ledger() {
+        let old = belief("b_old", "old", "2026-01-01T00:00:00Z");
+        let new = belief("b_new", "new", "2026-02-01T00:00:00Z");
+        let far = belief("b_far", "far", "2026-03-01T00:00:00Z");
+        let g = Graph::from_beliefs(vec![old, new, far]);
+        // old ~ new (identical vectors); far is orthogonal
+        let v = vecs(&[("b_old", [1.0, 0.0]), ("b_new", [1.0, 0.0]), ("b_far", [0.0, 1.0])]);
+        let sw = Sweeper { threshold: 0.8 };
+        let cands = sw.candidates(&g, &HashSet::new(), &v, &HashSet::new(), None);
+        assert_eq!(cands.len(), 1, "only the near-duplicate pair qualifies");
+        assert_eq!(cands[0].older, "b_old");
+        assert_eq!(cands[0].newer, "b_new", "direction = txn order, regardless of iteration order");
+
+        // ledger skip: a judged pair never comes back
+        let mut skip = HashSet::new();
+        skip.insert(Sweeper::pair_key("b_old", "b_new"));
+        assert!(sw.candidates(&g, &HashSet::new(), &v, &skip, None).is_empty());
+
+        // an existing edge (either direction, any kind) removes the pair
+        let mut edge = belief("b_e", "rel-e", "2026-02-02T00:00:00Z");
+        edge.relation = Some(memory_core::Relation {
+            kind: EdgeKind::Refines,
+            subject: "b_old".into(),
+            object: "b_new".into(),
+        });
+        let g2 = Graph::from_beliefs(vec![
+            belief("b_old", "old", "2026-01-01T00:00:00Z"),
+            belief("b_new", "new", "2026-02-01T00:00:00Z"),
+            edge,
+        ]);
+        assert!(sw.candidates(&g2, &HashSet::new(), &v, &HashSet::new(), None).is_empty());
+    }
+
+
+    #[test]
+    fn watermark_skips_fully_pre_scanned_pairs_but_not_pairs_with_a_new_belief() {
+        let a = belief("b_a", "a", "2026-01-01T00:00:00Z");
+        let b = belief("b_b", "b", "2026-02-01T00:00:00Z");
+        let c = belief("b_c", "c", "2026-05-01T00:00:00Z"); // arrives after the scan
+        let g = Graph::from_beliefs(vec![a, b, c]);
+        let v = vecs(&[("b_a", [1.0, 0.0]), ("b_b", [1.0, 0.0]), ("b_c", [1.0, 0.0])]);
+        let sw = Sweeper { threshold: 0.8 };
+        // no watermark: all 3 pairs
+        assert_eq!(sw.candidates(&g, &HashSet::new(), &v, &HashSet::new(), None).len(), 3);
+        // watermark after b, before c: (a,b) is pre-scanned and skipped; both pairs touching
+        // the NEW belief c survive → steady-state cost is O(new × n)
+        let cands = sw.candidates(&g, &HashSet::new(), &v, &HashSet::new(), Some("2026-03-01T00:00:00Z"));
+        assert_eq!(cands.len(), 2);
+        assert!(cands.iter().all(|p| p.newer == "b_c"));
+    }
+
+    #[test]
+    fn defeated_beliefs_never_enter_the_sweep() {
+        let old = belief("b_old", "old", "2026-01-01T00:00:00Z");
+        let new = belief("b_new", "new", "2026-02-01T00:00:00Z");
+        let g = Graph::from_beliefs(vec![old, new]);
+        let v = vecs(&[("b_old", [1.0, 0.0]), ("b_new", [1.0, 0.0])]);
+        let mut defeated = HashSet::new();
+        defeated.insert("b_old".to_string());
+        let sw = Sweeper { threshold: 0.8 };
+        assert!(sw.candidates(&g, &defeated, &v, &HashSet::new(), None).is_empty(),
+            "already-defeated beliefs need no sweeping");
+    }
+
+    #[test]
+    fn run_requires_both_gates_and_records_every_verdict() {
+        let g = Graph::from_beliefs(vec![
+            belief("b_old", "old", "2026-01-01T00:00:00Z"),
+            belief("b_new", "new", "2026-02-01T00:00:00Z"),
+            belief("b_o2", "o2", "2026-01-01T00:00:00Z"),
+            belief("b_n2", "n2", "2026-02-01T00:00:00Z"),
+            belief("b_o3", "o3", "2026-01-01T00:00:00Z"),
+            belief("b_n3", "n3", "2026-02-01T00:00:00Z"),
+        ]);
+        let cands = vec![
+            SweepCandidate { sim: 0.95, older: "b_old".into(), newer: "b_new".into() }, // confirmed
+            SweepCandidate { sim: 0.90, older: "b_o2".into(), newer: "b_n2".into() },  // proposer says independent
+            SweepCandidate { sim: 0.85, older: "b_o3".into(), newer: "b_n3".into() },  // refuter kills
+        ];
+        let sw = Sweeper { threshold: 0.8 };
+        let mut ledger: Vec<(String, String)> = vec![];
+        let (props, st) = sw.run(
+            &g,
+            &cands,
+            &mut |old, _new| if old.id == "b_o2" { no("both true") } else { yes("state changed") },
+            &mut |old, _new| if old.id == "b_o3" { no("still valid detail") } else { yes("misleads today") },
+            &mut |k, v, _why| ledger.push((k.into(), v.into())),
+        );
+        assert_eq!(st.judged, 3);
+        assert_eq!((st.confirmed, st.independent, st.refuted), (1, 1, 1));
+        assert_eq!(props.len(), 1, "only the double-verified pair becomes an edge");
+        let p = &props[0];
+        assert_eq!(p.kind, EdgeKind::Supersedes);
+        assert_eq!((p.subject.as_str(), p.object.as_str()), ("b_new", "b_old"), "newer supersedes older");
+        assert_eq!(p.linker, "sweep@1");
+        assert!(p.rationale.contains("survived adversarial refute"));
+        // every completed judgment was recorded — the veto-durability contract
+        assert_eq!(ledger.len(), 3);
+        assert!(ledger.iter().any(|(k, v)| k == "b_old|b_new" && v == "confirmed"));
+        assert!(ledger.iter().any(|(k, v)| k == "b_o2|b_n2" && v == "independent"));
+        assert!(ledger.iter().any(|(k, v)| k == "b_o3|b_n3" && v == "refuted"));
+    }
+
+    #[test]
+    fn judge_error_leaves_the_pair_unjudged_for_a_future_run() {
+        let g = Graph::from_beliefs(vec![
+            belief("b_old", "old", "2026-01-01T00:00:00Z"),
+            belief("b_new", "new", "2026-02-01T00:00:00Z"),
+        ]);
+        let cands = vec![SweepCandidate { sim: 0.9, older: "b_old".into(), newer: "b_new".into() }];
+        let sw = Sweeper { threshold: 0.8 };
+        let mut recorded = 0;
+        let (props, st) = sw.run(&g, &cands, &mut |_, _| None, &mut |_, _| yes("x"),
+            &mut |_, _, _| recorded += 1);
+        assert!(props.is_empty());
+        assert_eq!(st.errors, 1);
+        assert_eq!(recorded, 0, "an errored pair must NOT enter the ledger — it retries next run");
     }
 }

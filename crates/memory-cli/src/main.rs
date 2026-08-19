@@ -9,7 +9,7 @@
 //!
 //! Store: $MEMORY_DIR (default ~/.local/share/agentic-memory/beliefs).
 
-use memory_consolidate::{novelty_pair_key, Consolidator, NoveltyDreamer, Orchestrator, ProbeRecord, Reducer};
+use memory_consolidate::{novelty_pair_key, Consolidator, NoveltyDreamer, Orchestrator, ProbeRecord, Reducer, SweepVerdict, Sweeper};
 use memory_core::{
     content_id, cosine, iso_now, Belief, Cadence, Confidence, EdgeKind, Graph, Hint, LinkCtx,
     LinkProposal, Relation, StructuralConfidence,
@@ -83,6 +83,7 @@ fn main() {
         Some("forget") => cmd_forget(&args[1..]),
         Some("promote") => cmd_promote(&args[1..]),
         Some("consolidate") => cmd_consolidate(&args[1..]),
+        Some("sweep") => cmd_sweep(&args[1..]),
         Some("reduce") => cmd_reduce(&args[1..]),
         Some("dream") => cmd_dream(&args[1..]),
         Some("review") => cmd_review(&args[1..]),
@@ -101,6 +102,7 @@ fn main() {
             eprintln!("  mem forget <slug|id> [--reason R]  # retract a belief: recall drops it (file kept)");
             eprintln!("  mem promote [<branch>] [--dry-run]  # lift a merged branch's beliefs into repo canon");
             eprintln!("  mem consolidate [--limit N]   # run the LLM judge over recent beliefs");
+            eprintln!("  mem sweep [--limit N] [--threshold T] [--dry-run]  # find + mark SILENT staleness across the whole frontier (double-verified supersedes)");
             eprintln!("  mem reduce [--dry-run]        # collapse duplicate beliefs: recall folds them behind one rep");
             eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
             eprintln!("  mem review [--limit N]        # list edges flagged for frontier review (candidate depends_on)");
@@ -1222,6 +1224,222 @@ fn cmd_consolidate(args: &[String]) {
         let n_review = depends_on_candidates(&sg2, &sg2.defeated()).len();
         if n_review > 0 {
             println!("⚑ {n_review} edge(s) flagged for frontier review — run `mem review` to adjudicate (candidate depends_on).");
+        }
+    }
+}
+
+
+/// `mem sweep [--limit N] [--threshold T] [--dry-run]` — the staleness sweep (V8): find beliefs
+/// the store has silently outgrown and mark them superseded, WITHOUT losing history.
+///
+/// Automatic supersession, bounded three ways:
+///   - every edge is double-verified (strict proposer + adversarial refuter — 86% measured
+///     precision on the real store with claude:sonnet judges);
+///   - every edge is an ordinary defeasible edge-belief (`sweep@1`): `mem forget <edge-slug>`
+///     reinstates the older belief, and because verdicts live in a LEDGER
+///     (`$MEMORY_DIR/.sweep-ledger.json`), a vetoed pair is never re-judged → never re-drawn;
+///   - a per-run `--limit` caps LLM spend; the ledger makes repeat runs incremental.
+/// `--dry-run` judges and fills the ledger but commits nothing; the next real run commits the
+/// already-confirmed pairs without re-paying for judgment.
+/// Judge model: `SWEEP_MODEL` > `JUDGE_MODEL` > `claude:sonnet` (V8: qwen-class judges are why
+/// V7's from-scratch linker failed; sweeping wants the strongest judge available).
+fn cmd_sweep(args: &[String]) {
+    let mut limit = 25usize;
+    let mut threshold = 0.80f32;
+    let mut dry = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(25); i += 1; }
+            "--threshold" => { threshold = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(0.80); i += 1; }
+            "--dry-run" => dry = true,
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let dir = store_dir();
+    let scopes = active_scopes();
+    let g = match Graph::load_dir(&dir) {
+        Ok(g) => g,
+        Err(_) => { println!("No memories yet."); return; }
+    };
+    let sg = scoped_graph(&g, &scopes);
+    let defeated = sg.defeated();
+    let content: Vec<&Belief> = sg.content().collect();
+    if content.len() < 2 {
+        println!("Need at least 2 current beliefs in scope to sweep.");
+        return;
+    }
+
+    // embeddings for every in-scope content belief (candidate generation needs them)
+    let oll = memory_embed::Ollama::from_env();
+    let mut vectors = memory_embed::load_cache(&dir, &oll.model);
+    let need: Vec<&Belief> = content.iter().copied().filter(|b| !vectors.contains_key(&b.id)).collect();
+    if !need.is_empty() {
+        let docs: Vec<String> = need.iter().map(|b| format!("search_document: {}", b.claim)).collect();
+        match oll.embed(&docs) {
+            Ok(vs) => {
+                for (b, v) in need.iter().zip(vs) {
+                    vectors.insert(b.id.clone(), v);
+                }
+                memory_embed::save_cache(&dir, &oll.model, &vectors);
+            }
+            Err(e) => { eprintln!("embedding failed ({e}); can't generate sweep candidates"); return; }
+        }
+    }
+
+    // ledger: pair_key -> {verdict, why, at, committed} — judged pairs are never re-paid for,
+    // and a forgotten (vetoed) sweep edge stays forgotten because its pair stays "confirmed".
+    let ledger_path = dir.join(".sweep-ledger.json");
+    let mut ledger: serde_json::Map<String, serde_json::Value> =
+        std::fs::read_to_string(&ledger_path).ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+    let judged_keys: std::collections::HashSet<String> = ledger.keys().cloned().collect();
+
+    // scan watermark (reserved ledger key): pairs where BOTH beliefs predate the last COMPLETED
+    // scan were enumerated then — skipping them keeps candidate gen O(new x n) as the store grows.
+    const WATERMARK_KEY: &str = "__scan_watermark__";
+    let watermark = ledger.get(WATERMARK_KEY)
+        .and_then(|v| v.get("at"))
+        .and_then(|x| x.as_str())
+        .map(String::from);
+    let sweeper = Sweeper { threshold };
+    let cands = sweeper.candidates(&sg, &defeated, &vectors, &judged_keys, watermark.as_deref());
+    let backlog = cands.len();
+
+    // ledger replay: confirmed-but-uncommitted pairs from a prior --dry-run commit for free
+    let mut replay: Vec<memory_core::LinkProposal> = Vec::new();
+    if !dry {
+        for (key, v) in ledger.iter() {
+            if v.get("verdict").and_then(|x| x.as_str()) == Some("confirmed")
+                && !v.get("committed").and_then(|x| x.as_bool()).unwrap_or(false)
+            {
+                let (Some(older), Some(newer)) = (key.split('|').next(), key.split('|').nth(1)) else { continue };
+                if sg.by_id(older).is_none() || sg.by_id(newer).is_none() || defeated.contains(older) {
+                    continue;
+                }
+                replay.push(memory_core::LinkProposal {
+                    kind: EdgeKind::Supersedes,
+                    subject: newer.to_string(),
+                    object: older.to_string(),
+                    confidence: memory_core::Confidence::Strong,
+                    rationale: format!(
+                        "sweep: {} (from ledger; judged in a prior run)",
+                        v.get("why").and_then(|x| x.as_str()).unwrap_or("confirmed stale")
+                    ),
+                    linker: "sweep@1".into(),
+                });
+            }
+        }
+    }
+
+    let model = std::env::var("SWEEP_MODEL")
+        .or_else(|_| std::env::var("JUDGE_MODEL"))
+        .unwrap_or_else(|_| "claude:sonnet".into());
+    let take: Vec<_> = cands.into_iter().take(limit).collect();
+    println!(
+        "sweeping {} of {backlog} candidate pair(s) (cos >= {threshold:.2}) with judge={model}{}",
+        take.len(),
+        if dry { " [dry-run]" } else { "" }
+    );
+
+    const PROPOSE_SYS: &str = "You judge whether a NEWER belief makes an OLDER belief stale. \
+Answer SUPERSEDES only if a reader acting on the OLDER belief today would be MISLED because the \
+newer one reports the situation changed (fixed/replaced/reversed). Answer INDEPENDENT if both can \
+be true at once, if they merely overlap in topic, or if the newer one just adds detail. Be strict; \
+default to INDEPENDENT when unsure. Reply JSON: {\"verdict\":\"SUPERSEDES\"|\"INDEPENDENT\",\"why\":\"<12 words>\"}";
+    const REFUTE_SYS: &str = "Someone claims the NEWER belief makes the OLDER one stale and that \
+the older should be RETRACTED from an engineer's memory. Your job is to REFUTE that claim. \
+Retracting a still-true belief destroys information, so argue for keeping it. Answer KEEP unless \
+the older belief is now positively MISLEADING (it asserts a state of the world that the newer \
+belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why\":\"<12 words>\"}";
+
+    let ask = |sys: &str, older: &Belief, newer: &Belief, stale_word: &str| -> Option<SweepVerdict> {
+        let older_t = if older.txn_time.len() >= 10 { &older.txn_time[..10] } else { "?" };
+        let newer_t = if newer.txn_time.len() >= 10 { &newer.txn_time[..10] } else { "?" };
+        let u = format!("OLDER ({older_t}): {}\n\nNEWER ({newer_t}): {}", older.claim, newer.claim);
+        match memory_embed::chat_json(&oll.url, &model, sys, &u) {
+            Ok(v) => {
+                let verdict = v.get("verdict").and_then(|x| x.as_str()).unwrap_or("").to_uppercase();
+                Some(SweepVerdict {
+                    stale: verdict == stale_word,
+                    why: v.get("why").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                })
+            }
+            Err(e) => { eprintln!("  judge error: {e}"); None }
+        }
+    };
+
+    let mut new_entries: Vec<(String, String, String)> = Vec::new();
+    let (props, st) = sweeper.run(
+        &sg,
+        &take,
+        &mut |o, n| ask(PROPOSE_SYS, o, n, "SUPERSEDES"),
+        &mut |o, n| ask(REFUTE_SYS, o, n, "MISLEADING"),
+        &mut |key, verdict, why| {
+            let slugs = key.split('|')
+                .map(|id| sg.by_id(id).map(|b| b.slug.clone()).unwrap_or_default())
+                .collect::<Vec<_>>();
+            match verdict {
+                "confirmed" => println!("  STALE: [{}] superseded by [{}] — {why}", slugs[0], slugs[1]),
+                "refuted" => println!("  kept (refuter): [{}] — {why}", slugs[0]),
+                _ => {}
+            }
+            new_entries.push((key.to_string(), verdict.to_string(), why.to_string()));
+        },
+    );
+
+    // persist verdicts (dry-run included — that's what makes the next real run free)
+    for (key, verdict, why) in &new_entries {
+        ledger.insert(key.clone(), serde_json::json!({
+            "verdict": verdict, "why": why, "at": iso_now(), "committed": false,
+        }));
+    }
+
+    let mut drawn = 0;
+    if dry {
+        println!(
+            "\ndry-run: {} pair(s) confirmed stale ({} from this run's judging); nothing committed.",
+            replay.len() + props.len(), st.confirmed
+        );
+        println!("next: mem sweep            (commits the confirmed pairs from the ledger, free)");
+    } else {
+        for p in replay.iter().chain(props.iter()) {
+            let scope = sg.by_id(&p.object).map(|b| belief_scope(b).to_string()).unwrap_or_else(|| "global".into());
+            drawn += Consolidator::commit(&dir, std::slice::from_ref(p), &scope);
+            if let Some(v) = ledger.get_mut(&Sweeper::pair_key(&p.object, &p.subject)) {
+                v["committed"] = serde_json::Value::Bool(true);
+            }
+        }
+    }
+    if let Ok(t) = serde_json::to_string_pretty(&serde_json::Value::Object(ledger.clone())) {
+        let _ = std::fs::write(&ledger_path, t);
+    }
+
+    println!(
+        "\nswept {} pair(s): {} confirmed stale, {} independent, {} saved by the refuter, {} judge error(s)",
+        st.judged, st.confirmed, st.independent, st.refuted, st.errors
+    );
+    if !dry {
+        println!("drew {drawn} supersedes edge(s) — recall now surfaces only the current side; nothing was deleted");
+        if drawn > 0 {
+            println!("undo any of them: mem expand <old-slug> shows the edge; mem forget <edge-slug> reinstates (the veto is durable — sweep never re-judges a pair)");
+        }
+    }
+    let remaining = backlog.saturating_sub(take.len());
+    if remaining > 0 {
+        println!("{remaining} candidate pair(s) still unjudged — run mem sweep again to continue");
+    } else if st.errors == 0 {
+        // scan complete: advance the watermark to the newest in-scope belief, so future runs
+        // only enumerate pairs involving beliefs newer than this moment.
+        let newest = sg.content().map(|b| b.txn_time.clone()).max().unwrap_or_default();
+        if !newest.is_empty() {
+            ledger.insert(WATERMARK_KEY.into(), serde_json::json!({"at": newest}));
+            if let Ok(t) = serde_json::to_string_pretty(&serde_json::Value::Object(ledger)) {
+                let _ = std::fs::write(&ledger_path, t);
+            }
         }
     }
 }

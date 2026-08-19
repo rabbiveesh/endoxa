@@ -36,7 +36,8 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   - `src/bin/recall.rs` — recall harness.
 - **`crates/memory-cli`** (`mem`) — the user surface. Subcommands: `remember`, `recall`, `expand`,
   `ask` (the one LLM-on-read path), `forget` (reified `retracts` edge, non-destructive), `promote`
-  (lift a branch's beliefs into repo canon), `consolidate` (LLM judge draws edges), `reduce`
+  (lift a branch's beliefs into repo canon), `consolidate` (LLM judge draws edges), **`sweep`** (V8 staleness sweep: double-verified
+  auto-supersession over unlinked near-duplicate pairs; verdict ledger makes vetoes durable), `reduce`
   (duplicate `same-as` fold), `dream` (REM/novelty bridge pass), `review` (frontier-adjudication queue
   for candidate `depends_on`), `link <s> <kind> <o>` (author a durable `frontier@1` edge), `debt`
   (known-debt query + `blocked_on` auto-resurface), `onboard [--tier2]`, **`world [list|show|diff]`**
