@@ -1349,23 +1349,37 @@ fn cmd_sweep(args: &[String]) {
         i += 1;
     }
 
-    let dir = store_dir();
+    if let Err(e) = sweep_pass(&store_dir(), limit, threshold, dry) {
+        eprintln!("{e}");
+    }
+}
+
+/// What a sweep pass did — consumed by `cmd_sweep` and the background worker (metrics ledger:
+/// judged→targets, drawn→new_edges; per-pair judge errors ride in `errors`).
+pub struct SweepPassResult {
+    pub judged: usize,
+    pub confirmed: usize,
+    pub errors: usize,
+    pub drawn: usize,
+    pub backlog_remaining: usize,
+}
+
+/// The sweep body, callable from the CLI and the worker (narration goes to the terminal or the
+/// worker log respectively). `Err` = the pass could not run at all (empty store, embeddings
+/// down); per-pair judge errors are soft and reported in the result.
+pub fn sweep_pass(dir: &PathBuf, limit: usize, threshold: f32, dry: bool) -> Result<SweepPassResult, String> {
     let scopes = active_scopes();
-    let g = match Graph::load_dir(&dir) {
-        Ok(g) => g,
-        Err(_) => { println!("No memories yet."); return; }
-    };
+    let g = Graph::load_dir(dir).map_err(|_| "No memories yet.".to_string())?;
     let sg = scoped_graph(&g, &scopes);
     let defeated = sg.defeated();
     let content: Vec<&Belief> = sg.content().collect();
     if content.len() < 2 {
-        println!("Need at least 2 current beliefs in scope to sweep.");
-        return;
+        return Err("Need at least 2 current beliefs in scope to sweep.".into());
     }
 
     // embeddings for every in-scope content belief (candidate generation needs them)
     let oll = memory_embed::Ollama::from_env();
-    let mut vectors = memory_embed::load_cache(&dir, &oll.model);
+    let mut vectors = memory_embed::load_cache(dir, &oll.model);
     let need: Vec<&Belief> = content.iter().copied().filter(|b| !vectors.contains_key(&b.id)).collect();
     if !need.is_empty() {
         let docs: Vec<String> = need.iter().map(|b| format!("search_document: {}", b.claim)).collect();
@@ -1374,9 +1388,9 @@ fn cmd_sweep(args: &[String]) {
                 for (b, v) in need.iter().zip(vs) {
                     vectors.insert(b.id.clone(), v);
                 }
-                memory_embed::save_cache(&dir, &oll.model, &vectors);
+                memory_embed::save_cache(dir, &oll.model, &vectors);
             }
-            Err(e) => { eprintln!("embedding failed ({e}); can't generate sweep candidates"); return; }
+            Err(e) => return Err(format!("embedding failed ({e}); can't generate sweep candidates")),
         }
     }
 
@@ -1429,6 +1443,9 @@ fn cmd_sweep(args: &[String]) {
     let model = std::env::var("SWEEP_MODEL")
         .or_else(|_| std::env::var("JUDGE_MODEL"))
         .unwrap_or_else(|_| "claude:sonnet".into());
+    // Independent refuter seam (V8 open item): proposer and refuter share one model's blind
+    // spots by default; `REFUTE_MODEL` (any provider ref) breaks the correlation.
+    let refute_model = std::env::var("REFUTE_MODEL").unwrap_or_else(|_| model.clone());
     let take: Vec<_> = cands.into_iter().take(limit).collect();
     println!(
         "sweeping {} of {backlog} candidate pair(s) (cos >= {threshold:.2}) with judge={model}{}",
@@ -1447,11 +1464,11 @@ Retracting a still-true belief destroys information, so argue for keeping it. An
 the older belief is now positively MISLEADING (it asserts a state of the world that the newer \
 belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why\":\"<12 words>\"}";
 
-    let ask = |sys: &str, older: &Belief, newer: &Belief, stale_word: &str| -> Option<SweepVerdict> {
+    let ask = |sys: &str, m: &str, older: &Belief, newer: &Belief, stale_word: &str| -> Option<SweepVerdict> {
         let older_t = if older.txn_time.len() >= 10 { &older.txn_time[..10] } else { "?" };
         let newer_t = if newer.txn_time.len() >= 10 { &newer.txn_time[..10] } else { "?" };
         let u = format!("OLDER ({older_t}): {}\n\nNEWER ({newer_t}): {}", older.claim, newer.claim);
-        match memory_embed::chat_json(&oll.url, &model, sys, &u) {
+        match memory_embed::chat_json(&oll.url, m, sys, &u) {
             Ok(v) => {
                 let verdict = v.get("verdict").and_then(|x| x.as_str()).unwrap_or("").to_uppercase();
                 Some(SweepVerdict {
@@ -1467,8 +1484,8 @@ belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why
     let (props, st) = sweeper.run(
         &sg,
         &take,
-        &mut |o, n| ask(PROPOSE_SYS, o, n, "SUPERSEDES"),
-        &mut |o, n| ask(REFUTE_SYS, o, n, "MISLEADING"),
+        &mut |o, n| ask(PROPOSE_SYS, &model, o, n, "SUPERSEDES"),
+        &mut |o, n| ask(REFUTE_SYS, &refute_model, o, n, "MISLEADING"),
         &mut |key, verdict, why| {
             let slugs = key.split('|')
                 .map(|id| sg.by_id(id).map(|b| b.slug.clone()).unwrap_or_default())
@@ -1499,7 +1516,7 @@ belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why
     } else {
         for p in replay.iter().chain(props.iter()) {
             let scope = sg.by_id(&p.object).map(|b| belief_scope(b).to_string()).unwrap_or_else(|| "global".into());
-            drawn += Consolidator::commit(&dir, std::slice::from_ref(p), &scope);
+            drawn += Consolidator::commit(dir, std::slice::from_ref(p), &scope);
             if let Some(v) = ledger.get_mut(&Sweeper::pair_key(&p.object, &p.subject)) {
                 v["committed"] = serde_json::Value::Bool(true);
             }
@@ -1533,6 +1550,13 @@ belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why
             }
         }
     }
+    Ok(SweepPassResult {
+        judged: st.judged,
+        confirmed: st.confirmed,
+        errors: st.errors,
+        drawn,
+        backlog_remaining: remaining,
+    })
 }
 
 /// `mem reduce [--dry-run]` — the deterministic duplicate-collapse pass. A SURFACING-stage HIDE,

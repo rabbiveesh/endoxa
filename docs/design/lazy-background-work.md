@@ -207,3 +207,21 @@ Every pass — background or foreground — is now **measured**, and deliberate 
   worker lock (a due-check pass is mid-flight) surfaces `consolidate SKIPPED … rerun: mem
   consolidate --limit N` on the next read and records an `ok:false` ledger line — the caller's
   explicit limit must not be dropped invisibly. A skipped due-check kick stays silent (fungible).
+
+## Post-merge follow-ups (2026-08-19, issues #7/#8)
+
+- **First-ever pass bypasses the throttle (#7):** on a brand-new store `last_run = now` made
+  `min_interval` suppress the write-threshold clause too — 5 quick remembers forked nothing until
+  the next write past the window. Fixed: before any pass has completed (`summary_at == 0`) the
+  write threshold alone is due; the throttle spaces REPEAT runs. Verified live: write #5 on a
+  fresh store forks within seconds.
+- **Sweep piggyback (#8):** the V8 staleness sweep rides a healthy due-check pass like dream, at
+  its own cadence (`worker.sweep_interval_mins`, default daily; `worker.sweep_limit` pairs/pass,
+  default 10 ≈ ≤20 chat calls). Judge errors are soft: the cadence only advances on an error-free
+  pass, so a dead judge retries instead of going quiet; a could-not-run (tiny scope, embeddings
+  down) counts as a visit to avoid log spam. Metered as `job: "sweep"`; pre-sweep state files
+  parse `last_sweep = 0` → one bounded sweep on first pass after upgrade. Verified live: the same
+  worker pass ran consolidate + sweep, and sweep correctly found zero candidates for a pair the
+  on-write judge had already linked — the layering (per-write catches same-session supersession,
+  sweep catches cross-session rot) does not double-work.
+
