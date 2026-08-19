@@ -239,6 +239,70 @@ scratch over 3 edge-rich corpora (inline edges stripped), the Linker recovers al
   (0 structured `forcing_constraint`/`revisit_when`/`severity` keys anywhere) → **Tier-2 onboarding is
   needed** to exercise §3b/N5 — now built and validated (see next-experiments.md N5).
 
+## Round 3 (2026-08-19) — V8: the real-store audit + the Sweeper (frontier-agent session, live box)
+
+The first analysis pass over the LIVE store (588 files: 488 content + 100 edge-beliefs) since the
+verdicts. Three findings, one refutation, one shipped organ. Analysis code: throwaway crate
+(not committed); all numbers below are aggregates over the private store.
+
+### V8a — The store's dominant failure mode is SILENT rot, not marked-conflict resolution
+- **484 unlinked near-duplicate pairs** (cos ≥ 0.80, both current, distinct txn_times) among 474
+  current content beliefs — vs **13 marked supersedes edges in the entire store**.
+- Judging the top 60 by similarity (strict claude:sonnet proposer, "default INDEPENDENT"):
+  **35 proposed stale → 30 survived a hostile refuter (86% precision)**. The refuter was told
+  retracting a true belief destroys information and killed 5 real over-reaches.
+- So the frontier was operating on ~2.9% of the store (14 defeated) while ~2.3× more verified
+  staleness sat undefeated in just the top-60 candidates. **The bottleneck is not `defeated()` —
+  it's that nothing ever LOOKED for supersession between beliefs from different sessions.**
+
+### V8b — "Relevance is anti-correlated with currency" is REFUTED on the real store
+The corpus finding (`cosine(defeated) > cosine(current)` in 2/3 conflicted neighborhoods) does
+not transfer: on all 13 real supersession pairs, the WINNER ranks #1 by cosine and the loser
+never outranks it (**0/13 inversions**; loser in naive top-5 12/13). Real re-observations are
+phrased like their successors, and newer text wins ties. Cross-cutting lesson 3 should be
+scoped to hand-authored corpora until re-measured.
+
+### V8c — The frontier's read-path value is real but SMALL on today's store (n=13, controlled)
+A controlled A/B (fixed question set, deterministic cosine grading, qwen2.5:7b @ 0, k ∈ {5,8,12}):
+frontier-filtering the injected context reduces stale answers in **6/6 arm comparisons, but only
+by 1–2 of 13**, mostly converting confidently-stale into unclear. Two method cautions, learned
+the hard way: (1) regenerating questions per run + LLM grading produced swings (8/2 → 5/6 on the
+SAME arm) larger than the effect — V4's dramatic silent-pick numbers deserve the same controls;
+(2) frontier-filtering with backfill admits a new belief the naive arm never saw — a confound.
+
+### V8 verdict → the Sweeper (`mem sweep`, shipped this round)
+V7 ("the auto-Linker is weak, invest in review/link") is **task-shape- and model-bound, not
+fundamental**: constrain the judgment to "near-duplicate pair, one newer — does the older now
+mislead?", use a frontier-grade judge (provider seam: `claude:sonnet`), and add an adversarial
+refuter, and edge quality jumps from F1 ≤ 0.19 to 86% precision. `mem sweep`:
+- deterministic candidate gen (cos ≥ 0.80, newer→older, unlinked, both current, scope-filtered);
+- strict proposer + hostile refuter — only double-verified pairs become `supersedes` (newer→older,
+  author `sweep@1`, Confidence::Strong, rationale carries both whys);
+- **history is never lost**: ordinary defeasible edge-beliefs via the Consolidator; one
+  `mem forget <edge-slug>` reinstates; the verdict LEDGER (`.sweep-ledger.json`) makes the veto
+  durable (a judged pair is never re-judged → never re-drawn) and makes `--dry-run` verdicts
+  replayable for free; `--limit` caps LLM spend per run.
+- **Live result (endoxa+global scope): 59 pairs judged → 10 confirmed (edges drawn), 47
+  independent, 2 saved by the refuter, 0 errors.** Recall now reports the dropped stale side;
+  supersession chains up to depth 3 emerged across runs; the candidate backlog shrinks
+  superlinearly as defeats remove pairs. Sweeping other scopes = run `mem sweep` in those repos.
+- `sweep@1` is deliberately NOT a regenerable-edge author, so human vetoes stick.
+- **Cost model ("isn't a sweep quadratic?"): quadratic only in the cheap part, once.** Candidate
+  gen is n²/2 dot products of CPU float math — measured ~0.1 s at n≈500; ~1.5 s projected at
+  n=2k; the knee (~10k, ~40 s scalar) is the SAME knee where storage-backends.md already hands
+  vectors to ANN/DuckDB+vss, so sweep inherits that scale path. The LLM part is NOT quadratic:
+  only ~0.4% of pairs clear cos ≥ 0.80 on real data (484/112k), each judged ONCE ever (ledger),
+  and a **scan watermark** (immutable beliefs + content-keyed embeddings ⇒ a pair wholly older
+  than the last completed scan can never become new) makes steady-state enumeration O(new × n).
+  Measured steady state on the live store: **66 ms, zero LLM calls.** And unlike `dream`, sweep
+  judges via the provider seam (API), not local ollama inference — the backfill was the one-time
+  payment for months of rot; per-write marginal cost is the new belief's 0–3 near-duplicate pairs.
+
+Open, in order: (1) sweep the remaining scopes from their repos; (2) an independent-model refuter
+(proposer and refuter currently share sonnet's blind spots); (3) `same-as`-aware sweeping (some
+"independent" pairs are duplicates wanting `mem reduce`, not supersession); (4) re-run V4 under
+V8c's controls.
+
 ## Cross-cutting lessons
 
 1. **The corpus and the real store stress different things and you need both.** The corpus has a rich
