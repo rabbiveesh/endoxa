@@ -14,7 +14,13 @@ jobs:
       - run: rustup target add x86_64-unknown-linux-musl
       - run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release -p memory-cli --target x86_64-unknown-linux-musl
-      - run: cp target/x86_64-unknown-linux-musl/release/mem mem-${{ github.ref_name }}-linux-musl
+      - run: |
+          cp target/x86_64-unknown-linux-musl/release/mem mem-${{ github.ref_name }}-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/mem mem-linux-musl
+      # Two names per release: the versioned one to pin, the stable one so
+      # `releases/latest/download/mem-linux-musl` always resolves (cloud setup scripts).
       - uses: softprops/action-gh-release@v2
         with:
-          files: mem-${{ github.ref_name }}-linux-musl
+          files: |
+            mem-${{ github.ref_name }}-linux-musl
+            mem-linux-musl
