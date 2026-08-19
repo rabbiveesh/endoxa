@@ -1336,7 +1336,7 @@ fn consolidate_pass(dir: &PathBuf, scopes: &[String], limit: usize) -> Result<(u
 /// V7's from-scratch linker failed; sweeping wants the strongest judge available).
 fn cmd_sweep(args: &[String]) {
     let mut limit = 25usize;
-    let mut threshold = 0.80f32;
+    let mut threshold = SWEEP_DEFAULT_THRESHOLD;
     let mut dry = false;
     let mut i = 0;
     while i < args.len() {
@@ -1349,10 +1349,14 @@ fn cmd_sweep(args: &[String]) {
         i += 1;
     }
 
-    if let Err(e) = sweep_pass(&store_dir(), limit, threshold, dry) {
-        eprintln!("{e}");
+    if let Err(e) = sweep_pass(&store_dir(), limit, threshold, dry, true) {
+        println!("{e}"); // benign infos (empty store, tiny scope) — stdout, like every sibling command
     }
 }
+
+/// The similarity floor shared by `mem sweep`'s default and the background worker — one
+/// literal, so retuning it can't silently diverge the two (review finding).
+pub const SWEEP_DEFAULT_THRESHOLD: f32 = 0.80;
 
 /// What a sweep pass did — consumed by `cmd_sweep` and the background worker (metrics ledger:
 /// judged→targets, drawn→new_edges; per-pair judge errors ride in `errors`).
@@ -1367,7 +1371,11 @@ pub struct SweepPassResult {
 /// The sweep body, callable from the CLI and the worker (narration goes to the terminal or the
 /// worker log respectively). `Err` = the pass could not run at all (empty store, embeddings
 /// down); per-pair judge errors are soft and reported in the result.
-pub fn sweep_pass(dir: &PathBuf, limit: usize, threshold: f32, dry: bool) -> Result<SweepPassResult, String> {
+/// `replay_ledger`: commit confirmed-but-uncommitted pairs from a PRIOR `--dry-run`. True only
+/// for a deliberate `mem sweep` — the dry-run preview/veto window belongs to the human, so the
+/// background worker must never flush it (review finding: the daily piggyback would otherwise
+/// commit an unreviewed preview, unbounded by its own limit).
+pub fn sweep_pass(dir: &PathBuf, limit: usize, threshold: f32, dry: bool, replay_ledger: bool) -> Result<SweepPassResult, String> {
     let scopes = active_scopes();
     let g = Graph::load_dir(dir).map_err(|_| "No memories yet.".to_string())?;
     let sg = scoped_graph(&g, &scopes);
@@ -1403,10 +1411,21 @@ pub fn sweep_pass(dir: &PathBuf, limit: usize, threshold: f32, dry: bool) -> Res
             .unwrap_or_default();
     let judged_keys: std::collections::HashSet<String> = ledger.keys().cloned().collect();
 
-    // scan watermark (reserved ledger key): pairs where BOTH beliefs predate the last COMPLETED
-    // scan were enumerated then — skipping them keeps candidate gen O(new x n) as the store grows.
-    const WATERMARK_KEY: &str = "__scan_watermark__";
-    let watermark = ledger.get(WATERMARK_KEY)
+    // scan watermark: pairs where BOTH beliefs predate the last COMPLETED scan were enumerated
+    // then — skipping them keeps candidate gen O(new x n) as the store grows. Two soundness
+    // gates (review findings):
+    //   - keyed by the ACTIVE SCOPE SET: a completed scan in repo A says nothing about repo B's
+    //     pairs, so a scope-blind watermark would permanently hide B's rot;
+    //   - stamped with the scan's THRESHOLD: "below threshold then → still below now" only holds
+    //     when now's threshold is >= then's, so a looser sweep ignores a tighter scan's mark.
+    // (The legacy bare "__scan_watermark__" key from pre-fix ledgers is deliberately unread —
+    // one full re-enumeration re-covers anything it might have wrongly hidden; judged pairs are
+    // still skipped via the ledger, so no LLM cost is re-paid.)
+    let watermark_key = format!("__scan_watermark__|{}", scopes.join("+"));
+    let watermark = ledger.get(&watermark_key)
+        .filter(|v| {
+            v.get("threshold").and_then(|x| x.as_f64()).map(|t| t as f32 <= threshold).unwrap_or(false)
+        })
         .and_then(|v| v.get("at"))
         .and_then(|x| x.as_str())
         .map(String::from);
@@ -1416,7 +1435,7 @@ pub fn sweep_pass(dir: &PathBuf, limit: usize, threshold: f32, dry: bool) -> Res
 
     // ledger replay: confirmed-but-uncommitted pairs from a prior --dry-run commit for free
     let mut replay: Vec<memory_core::LinkProposal> = Vec::new();
-    if !dry {
+    if !dry && replay_ledger {
         for (key, v) in ledger.iter() {
             if v.get("verdict").and_then(|x| x.as_str()) == Some("confirmed")
                 && !v.get("committed").and_then(|x| x.as_bool()).unwrap_or(false)
@@ -1480,7 +1499,17 @@ belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why
         }
     };
 
-    let mut new_entries: Vec<(String, String, String)> = Vec::new();
+    // Verdicts are PAID (≈2 chat calls each) — the record callback flushes the ledger after
+    // EVERY judgment, so a background sweep killed mid-run (laptop sleep, shutdown) keeps what
+    // it already paid for; only the in-flight pair is lost (review finding: batch-at-end
+    // persistence discarded a whole run's verdicts). Dry-run included — that's what makes the
+    // next deliberate run free.
+    let ledger_cell = std::cell::RefCell::new(ledger);
+    let persist = |led: &serde_json::Map<String, serde_json::Value>| {
+        if let Ok(t) = serde_json::to_string_pretty(&serde_json::Value::Object(led.clone())) {
+            let _ = std::fs::write(&ledger_path, t);
+        }
+    };
     let (props, st) = sweeper.run(
         &sg,
         &take,
@@ -1495,16 +1524,14 @@ belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why
                 "refuted" => println!("  kept (refuter): [{}] — {why}", slugs[0]),
                 _ => {}
             }
-            new_entries.push((key.to_string(), verdict.to_string(), why.to_string()));
+            let mut led = ledger_cell.borrow_mut();
+            led.insert(key.to_string(), serde_json::json!({
+                "verdict": verdict, "why": why, "at": iso_now(), "committed": false,
+            }));
+            persist(&led);
         },
     );
-
-    // persist verdicts (dry-run included — that's what makes the next real run free)
-    for (key, verdict, why) in &new_entries {
-        ledger.insert(key.clone(), serde_json::json!({
-            "verdict": verdict, "why": why, "at": iso_now(), "committed": false,
-        }));
-    }
+    let mut ledger = ledger_cell.into_inner();
 
     let mut drawn = 0;
     if dry {
@@ -1522,9 +1549,7 @@ belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why
             }
         }
     }
-    if let Ok(t) = serde_json::to_string_pretty(&serde_json::Value::Object(ledger.clone())) {
-        let _ = std::fs::write(&ledger_path, t);
-    }
+    persist(&ledger);
 
     println!(
         "\nswept {} pair(s): {} confirmed stale, {} independent, {} saved by the refuter, {} judge error(s)",
@@ -1544,10 +1569,8 @@ belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why
         // only enumerate pairs involving beliefs newer than this moment.
         let newest = sg.content().map(|b| b.txn_time.clone()).max().unwrap_or_default();
         if !newest.is_empty() {
-            ledger.insert(WATERMARK_KEY.into(), serde_json::json!({"at": newest}));
-            if let Ok(t) = serde_json::to_string_pretty(&serde_json::Value::Object(ledger)) {
-                let _ = std::fs::write(&ledger_path, t);
-            }
+            ledger.insert(watermark_key.clone(), serde_json::json!({"at": newest, "threshold": threshold}));
+            persist(&ledger);
         }
     }
     Ok(SweepPassResult {

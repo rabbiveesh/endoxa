@@ -217,11 +217,26 @@ Every pass — background or foreground — is now **measured**, and deliberate 
   fresh store forks within seconds.
 - **Sweep piggyback (#8):** the V8 staleness sweep rides a healthy due-check pass like dream, at
   its own cadence (`worker.sweep_interval_mins`, default daily; `worker.sweep_limit` pairs/pass,
-  default 10 ≈ ≤20 chat calls). Judge errors are soft: the cadence only advances on an error-free
-  pass, so a dead judge retries instead of going quiet; a could-not-run (tiny scope, embeddings
-  down) counts as a visit to avoid log spam. Metered as `job: "sweep"`; pre-sweep state files
-  parse `last_sweep = 0` → one bounded sweep on first pass after upgrade. Verified live: the same
-  worker pass ran consolidate + sweep, and sweep correctly found zero candidates for a pair the
-  on-write judge had already linked — the layering (per-write catches same-session supersession,
-  sweep catches cross-session rot) does not double-work.
+  default 10 ≈ ≤20 chat calls). Judge errors are soft per-pair (unledgered → retried), the cadence
+  advances every visit (retry-per-interval, never retry-per-due-pass), and an errors-only pass
+  SAYS so in the surfaced 🛠 line. A could-not-run (tiny scope, embeddings down) counts as a
+  benign visit, ok=true. Metered as `job: "sweep"` and included in `mem worker`'s totals;
+  pre-sweep state files parse `last_sweep = 0` → one bounded sweep on first pass after upgrade.
+  Verified live: the same worker pass ran consolidate + sweep, and sweep correctly found zero
+  candidates for a pair the on-write judge had already linked — the layering (per-write catches
+  same-session supersession, sweep catches cross-session rot) does not double-work.
+
+### Adversarial review round (2026-08-19, 10 confirmed findings, all fixed)
+
+The write→review→fix loop, applied to the #7/#8 diff itself. The keepers: (1) the daily worker
+sweep would have COMMITTED a user's un-reviewed `mem sweep --dry-run` preview via the ledger
+replay — replay is now opt-in to deliberate CLI sweeps only; (2) the scan watermark was
+store-wide but computed scope-relatively, permanently hiding other scopes' rot — now keyed by
+the active scope set AND stamped with the scan's threshold (a looser later sweep ignores a
+tighter scan's mark); (3) a dead sweep judge caused an unbounded, silent, no-backoff retry storm
+— now retry-per-interval with the error surfaced in the 🛠 line; (4) `summary_at==0` was a leaky
+"first ever" signal (lock-skips set it without running; foreground passes ran without setting
+it) — replaced by an explicit `runs` counter, and state-file creation is uniformly anchored via
+`load_state_for_update` no matter which writer creates the file first; (5) mid-run kills
+discarded a whole run's paid verdicts — the ledger now flushes after every judgment.
 

@@ -96,6 +96,11 @@ pub struct WorkerState {
     /// Epoch secs of the last completed background sweep visit (0 on pre-sweep state files —
     /// the first worker pass after upgrading sweeps once, bounded by `sweep_limit`).
     pub last_sweep: u64,
+    /// Number of passes that actually did work (background or foreground). The first-ever
+    /// throttle bypass keys on THIS (`runs == 0`), not on `summary_at` — a lock-skip writes a
+    /// summary without running a pass, and a foreground `--fg` pass runs without one (review
+    /// findings: bypass cleared spuriously / surviving a completed pass).
+    pub runs: u64,
     /// Store writes since `last_run` — the work signal the due-check reads.
     pub writes_since: u64,
     /// One line describing what the last run did (what `recall` surfaces).
@@ -103,6 +108,23 @@ pub struct WorkerState {
     /// When `last_summary` was written / last shown — surfacing shows each summary exactly once.
     pub summary_at: u64,
     pub surfaced_at: u64,
+}
+
+/// Load state for MODIFICATION: when the file does not exist yet, the interval anchors start
+/// at `now` — so no matter WHICH writer creates the file first (a remember, a foreground
+/// consolidate, a lock-skip note), a brand-new store never looks "overdue since epoch 0" to the
+/// max-interval / dream / sweep cadences. Review finding: `finish_foreground_pass` could create
+/// the file with zeroed anchors and re-open the surprise-first-fork hole through a side door.
+pub fn load_state_for_update(dir: &Path) -> WorkerState {
+    let existed = state_path(dir).exists();
+    let mut s = load_state(dir);
+    if !existed {
+        let now = epoch_now();
+        s.last_run = now;
+        s.last_dream = now;
+        s.last_sweep = now;
+    }
+    s
 }
 
 fn state_path(dir: &Path) -> PathBuf {
@@ -117,6 +139,7 @@ pub fn load_state(dir: &Path) -> WorkerState {
         last_run: jget_u64(&text, "\"last_run\":").unwrap_or(0),
         last_dream: jget_u64(&text, "\"last_dream\":").unwrap_or(0),
         last_sweep: jget_u64(&text, "\"last_sweep\":").unwrap_or(0),
+        runs: jget_u64(&text, "\"runs\":").unwrap_or(0),
         writes_since: jget_u64(&text, "\"writes_since\":").unwrap_or(0),
         last_summary: crate::jget(&text, "\"last_summary\":\"").unwrap_or_default(),
         summary_at: jget_u64(&text, "\"summary_at\":").unwrap_or(0),
@@ -129,8 +152,8 @@ pub fn load_state(dir: &Path) -> WorkerState {
 /// lost update would lose more than a counter blip (a run's summary, the `last_run` anchor).
 pub fn save_state(dir: &Path, s: &WorkerState) {
     let json = format!(
-        "{{\"last_run\":{},\"last_dream\":{},\"last_sweep\":{},\"writes_since\":{},\"summary_at\":{},\"surfaced_at\":{},\"last_summary\":\"{}\"}}\n",
-        s.last_run, s.last_dream, s.last_sweep, s.writes_since, s.summary_at, s.surfaced_at, sanitize(&s.last_summary)
+        "{{\"last_run\":{},\"last_dream\":{},\"last_sweep\":{},\"runs\":{},\"writes_since\":{},\"summary_at\":{},\"surfaced_at\":{},\"last_summary\":\"{}\"}}\n",
+        s.last_run, s.last_dream, s.last_sweep, s.runs, s.writes_since, s.summary_at, s.surfaced_at, sanitize(&s.last_summary)
     );
     let tmp = dir.join(format!("{STATE_FILE}.{}.tmp", std::process::id()));
     if std::fs::write(&tmp, json).is_ok() {
@@ -216,9 +239,9 @@ pub fn consolidate_due(s: &WorkerState, w: &WorkerSettings, now: u64) -> bool {
     // First-ever pass (issue #7): a brand-new store initializes `last_run = now`, which made
     // `min_interval` suppress the WRITE-THRESHOLD clause too — five quick remembers on a fresh
     // store forked nothing, and with due-checks only running on writes the backlog just sat.
-    // The throttle exists to space out REPEAT runs; before any pass has completed (summary_at
-    // still 0) the threshold alone is enough.
-    let first_ever = s.summary_at == 0;
+    // The throttle exists to space out REPEAT runs; before any pass has DONE WORK (`runs == 0` —
+    // not `summary_at`, which a lock-skip sets without running) the threshold alone is enough.
+    let first_ever = s.runs == 0;
     (s.writes_since >= w.consolidate_after_writes && (first_ever || elapsed >= w.min_interval_mins * 60))
         || elapsed >= w.max_interval_mins * 60
 }
@@ -355,7 +378,7 @@ fn metrics_block(dir: &Path, recent: usize) -> String {
         let fail_note = if failed > 0 { format!(", {failed} failed") } else { String::new() };
         Some(format!("{job} ×{} (Σ {} wall, {chat} chat, {edges} edge(s){fail_note})", runs.len(), dur(wall)))
     };
-    let parts: Vec<String> = ["consolidate", "dream"].iter().filter_map(|j| totals(j)).collect();
+    let parts: Vec<String> = ["consolidate", "dream", "sweep"].iter().filter_map(|j| totals(j)).collect();
     out.push_str(&format!("metrics: {}\n", parts.join(" · ")));
     for m in all.iter().rev().take(recent) {
         let what = if m.ok {
@@ -387,14 +410,7 @@ pub fn note_writes_and_kick(dir: &Path, n: usize) {
     }
     let s = {
         let _guard = lock_state(dir);
-        let existed = state_path(dir).exists();
-        let mut s = load_state(dir);
-        if !existed {
-            let now = epoch_now();
-            s.last_run = now;
-            s.last_dream = now;
-            s.last_sweep = now;
-        }
+        let mut s = load_state_for_update(dir);
         s.writes_since += n as u64;
         save_state(dir, &s);
         s
@@ -415,9 +431,10 @@ pub fn pending_writes(dir: &Path) -> u64 {
 /// minus the summary — the user already saw the output inline.
 pub fn finish_foreground_pass(dir: &Path, claimed: u64, did_work: bool) {
     let _guard = lock_state(dir);
-    let mut s = load_state(dir);
+    let mut s = load_state_for_update(dir);
     if did_work {
         s.writes_since = s.writes_since.saturating_sub(claimed);
+        s.runs = s.runs.saturating_add(1); // a foreground pass counts — the throttle now applies
     }
     s.last_run = epoch_now();
     save_state(dir, &s);
@@ -426,7 +443,7 @@ pub fn finish_foreground_pass(dir: &Path, claimed: u64, did_work: bool) {
 /// A deliberate `mem dream` visited the store — reset the worker's weekly piggyback cadence.
 pub fn note_foreground_dream(dir: &Path) {
     let _guard = lock_state(dir);
-    let mut s = load_state(dir);
+    let mut s = load_state_for_update(dir);
     s.last_dream = epoch_now();
     save_state(dir, &s);
 }
@@ -622,7 +639,7 @@ pub fn run_worker(args: &[String]) {
             let hint = limit_override.map(|l| format!(" --limit {l}")).unwrap_or_default();
             {
                 let _guard = lock_state(&dir);
-                let mut s = load_state(&dir);
+                let mut s = load_state_for_update(&dir);
                 s.last_summary =
                     sanitize(&format!("consolidate SKIPPED (another worker was running) — rerun: mem consolidate{hint}"));
                 s.summary_at = epoch_now();
@@ -640,7 +657,7 @@ pub fn run_worker(args: &[String]) {
         return;
     };
     let now = epoch_now();
-    let state = load_state(&dir);
+    let state = load_state_for_update(&dir); // absent file → anchors at now, not "overdue since 1970"
     let claimed = state.writes_since;
     let scopes = crate::active_scopes();
     println!(
@@ -737,16 +754,25 @@ pub fn run_worker(args: &[String]) {
             ..Metric::default()
         };
         let smeter = Meter::start();
-        match crate::sweep_pass(&dir, w.sweep_limit.max(1) as usize, 0.80, false) {
+        // No replay of a prior --dry-run's confirmed pairs (last arg): the preview/veto window
+        // belongs to the human — only a deliberate `mem sweep` commits it (review finding).
+        match crate::sweep_pass(&dir, w.sweep_limit.max(1) as usize, crate::SWEEP_DEFAULT_THRESHOLD, false, false) {
             Ok(r) => {
-                swept = r.errors == 0;
+                // Advance the cadence even when judges errored: retry-per-interval (daily), not
+                // retry-per-due-pass — a dead judge must not burn sweep_limit*2 calls every ten
+                // minutes forever (review finding: unbounded no-backoff retry storm).
+                swept = true;
                 sm.targets = r.judged as u64;
                 sm.new_edges = r.drawn as u64;
                 if r.errors > 0 {
                     sm.ok = false;
                     sm.error = format!("{} judge error(s)", r.errors);
-                }
-                if r.judged > 0 || r.drawn > 0 {
+                    // ...and SAY so where the user looks (recall's 🛠 line), not only in the ledger.
+                    parts.push(format!(
+                        "sweep: {} judge error(s) — judge unreachable? (SWEEP_MODEL/JUDGE_MODEL; retry in {}m)",
+                        r.errors, w.sweep_interval_mins
+                    ));
+                } else if r.judged > 0 || r.drawn > 0 {
                     let mut p = format!("sweep: {} pair(s) → {} supersedes edge(s)", r.judged, r.drawn);
                     if r.backlog_remaining > 0 {
                         p.push_str(&format!(" ({} pair(s) left — mem sweep covers them)", r.backlog_remaining));
@@ -756,9 +782,10 @@ pub fn run_worker(args: &[String]) {
             }
             Err(e) => {
                 // Could-not-run (tiny scope, embeddings down): count the visit — retrying every
-                // pass would spam the log for a store that simply has nothing to sweep.
+                // pass would spam the log for a store that simply has nothing to sweep. This is
+                // a benign skip, not a failure — keep ok=true so `mem worker`'s failed-count and
+                // recent-tail don't scream FAILED at a two-belief store (review finding).
                 swept = true;
-                sm.ok = false;
                 sm.error = e;
             }
         }
@@ -770,11 +797,12 @@ pub fn run_worker(args: &[String]) {
     {
         let _guard = lock_state(&dir);
         // Re-read state: the foreground may have recorded more writes while we ran — preserve them.
-        let mut fresh = load_state(&dir);
+        let mut fresh = load_state_for_update(&dir);
         if did_work {
             // Drain only what a REAL pass covered; a failed or nothing-in-scope pass keeps the
             // backlog so it retries (or catches up when the user is next active in its scope).
             fresh.writes_since = fresh.writes_since.saturating_sub(claimed);
+            fresh.runs = fresh.runs.saturating_add(1);
         }
         fresh.last_run = now;
         if dreamed {
@@ -887,6 +915,7 @@ mod tests {
             last_run: 1_753_900_000, // > 2^24: would corrupt through an f32 parse
             last_dream: 1_753_000_000,
             last_sweep: 1_753_100_000,
+            runs: 42,
             writes_since: 7,
             last_summary: "consolidate: 3 belief(s) → 2 new edge(s)".into(),
             summary_at: 1_753_900_001,
@@ -923,8 +952,8 @@ mod tests {
     fn due_check_is_work_first_with_time_bounds() {
         let w = WorkerSettings::default(); // 5 writes, 10m floor, 24h ceiling
         let base = 1_000_000u64;
-        // `summary_at: base` = a pass HAS completed → the min-interval throttle applies.
-        let s = |writes, last_run| WorkerState { writes_since: writes, last_run, summary_at: base, ..WorkerState::default() };
+        // `runs: 1` = a pass HAS done work → the min-interval throttle applies.
+        let s = |writes, last_run| WorkerState { writes_since: writes, last_run, runs: 1, ..WorkerState::default() };
 
         // no pending writes → never due, even after the ceiling
         assert!(!consolidate_due(&s(0, base), &w, base + 48 * 3600));
@@ -941,16 +970,20 @@ mod tests {
     #[test]
     fn first_ever_pass_bypasses_the_throttle_at_the_write_threshold() {
         // Issue #7: 5 quick remembers on a BRAND-NEW store (last_run=now init, no pass has ever
-        // completed → summary_at=0) must fork immediately — the throttle spaces REPEAT runs.
+        // done work → runs=0) must fork immediately — the throttle spaces REPEAT runs.
         let w = WorkerSettings::default();
         let base = 1_000_000u64;
-        let fresh = |writes| WorkerState { writes_since: writes, last_run: base, summary_at: 0, ..WorkerState::default() };
+        let fresh = |writes| WorkerState { writes_since: writes, last_run: base, runs: 0, ..WorkerState::default() };
 
         assert!(consolidate_due(&fresh(5), &w, base + 60), "threshold on a fresh store → due NOW");
         assert!(!consolidate_due(&fresh(4), &w, base + 60), "below threshold still waits");
-        // once any pass has completed, the throttle is back in force
-        let ran = WorkerState { writes_since: 5, last_run: base, summary_at: base, ..WorkerState::default() };
+        // once any pass has DONE WORK, the throttle is back in force
+        let ran = WorkerState { writes_since: 5, last_run: base, runs: 1, ..WorkerState::default() };
         assert!(!consolidate_due(&ran, &w, base + 60));
+        // review finding: a lock-skip writes a SUMMARY without running a pass — summary_at
+        // must NOT clear the bypass; only `runs` does.
+        let skipped = WorkerState { writes_since: 5, last_run: base, runs: 0, summary_at: base, ..WorkerState::default() };
+        assert!(consolidate_due(&skipped, &w, base + 60), "a lock-skip summary is not a completed pass");
     }
 
     #[test]
