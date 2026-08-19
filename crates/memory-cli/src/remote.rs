@@ -231,12 +231,14 @@ fn s3(
 
     let mut cmd = Command::new("curl");
     cmd.arg("-sS").arg("--max-time").arg("120");
-    for (k, v) in &s.headers {
-        cmd.arg("-H").arg(format!("{k}: {v}"));
+    // Headers travel via a curl CONFIG ON STDIN (-K -), not argv: argv is world-readable in
+    // /proc/*/cmdline, and the Authorization header is a replayable signed request for the
+    // SigV4 clock window. Nothing secret remains on the command line.
+    let mut cfg = String::new();
+    for (k, v) in s.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).chain(extra_headers.iter().copied()) {
+        cfg.push_str(&format!("header = \"{k}: {v}\"\n"));
     }
-    for (k, v) in extra_headers {
-        cmd.arg("-H").arg(format!("{k}: {v}"));
-    }
+    cmd.arg("-K").arg("-");
     match (method, upload) {
         ("PUT", Some(p)) => {
             cmd.arg("-T").arg(p); // -T implies PUT; never combine with -X
@@ -259,7 +261,18 @@ fn s3(
         }
     }
     cmd.arg("-w").arg("%{http_code}").arg(&s.url);
-    let outp = cmd.output().map_err(|e| format!("curl spawn failed (is curl installed?): {e}"))?;
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("curl spawn failed (is curl installed?): {e}"))?;
+    use std::io::Write as _;
+    child
+        .stdin
+        .take()
+        .ok_or("no curl stdin")?
+        .write_all(cfg.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let outp = child.wait_with_output().map_err(|e| e.to_string())?;
     if !outp.status.success() {
         return Err(format!("curl: {}", String::from_utf8_lossy(&outp.stderr).trim()));
     }
