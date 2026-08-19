@@ -1,0 +1,20 @@
+# Static musl binary on tag push — cloud sessions install `mem` from the release instead of
+# paying a cargo build. `gh release download -p 'mem-*-linux-musl' -R rabbiveesh/endoxa`.
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release -p memory-cli --target x86_64-unknown-linux-musl
+      - run: cp target/x86_64-unknown-linux-musl/release/mem mem-${{ github.ref_name }}-linux-musl
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: mem-${{ github.ref_name }}-linux-musl

@@ -793,6 +793,20 @@ pub fn run_worker(args: &[String]) {
         append_metric(&dir, &sm);
     }
 
+    // ☁ Push-through for background writes: edges drawn by consolidate/dream/sweep were
+    // written AFTER remember's own push, so ship them now — otherwise they'd sit local until
+    // the next remember. Push-only (recall/ask own the pull path); no metric — this is
+    // transport, not cognition. Every failure is a benign one-liner.
+    if let Some(r) = crate::remote::Remote::from_settings(&crate::load_settings().remote) {
+        match crate::remote::sync_pass(&dir, &r, false, true, false) {
+            Ok(rep) if rep.pushed + rep.already > 0 || rep.embeddings.is_some() => {
+                parts.push(format!("☁ {}", rep.line()));
+            }
+            Ok(_) => {}
+            Err(e) => parts.push(format!("☁ push skipped: {e}")),
+        }
+    }
+
     let summary = parts.join(" · ");
     {
         let _guard = lock_state(&dir);

@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod remote;
 mod worker;
 mod worlds;
 
@@ -29,6 +30,7 @@ mod worlds;
 struct Settings {
     recall: RecallSettings,
     worker: worker::WorkerSettings,
+    remote: RemoteSettings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,9 +46,31 @@ impl Default for RecallSettings {
     }
 }
 
+/// ☁ Remote store (S3-compatible bucket as shared L0 transport — see remote.rs).
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct RemoteSettings {
+    /// `https://<host>/<bucket>[/<prefix>]` (path-style). Unset = local-only (the default).
+    pub url: Option<String>,
+    /// `reader` (default) | `writer` — the ONE box with ollama that authors `.embeddings.json`.
+    pub role: String,
+    /// Minutes between implicit pulls on recall/ask.
+    pub staleness: u64,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        RemoteSettings { url: None, role: "reader".into(), staleness: 10 }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
-        Settings { recall: RecallSettings::default(), worker: worker::WorkerSettings::default() }
+        Settings {
+            recall: RecallSettings::default(),
+            worker: worker::WorkerSettings::default(),
+            remote: RemoteSettings::default(),
+        }
     }
 }
 
@@ -99,6 +123,7 @@ fn main() {
         Some("relive") => cmd_relive(&args[1..]),
         Some("worker") => worker::cmd_worker(&args[1..]),
         Some("__worker") => worker::run_worker(&args[1..]),
+        Some("sync") => remote::cmd_sync(&args[1..]),
         Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
         _ => {
             eprintln!("usage:");
@@ -119,6 +144,7 @@ fn main() {
             eprintln!("  mem world [list|show <name>|diff <a> <b>]  # parallel realities: per-world frontiers from worlds.json");
             eprintln!("  mem relive <as-of-time> [--all]  # bitemporal replay: the frontier as it stood then, diffed vs now");
             eprintln!("  mem worker [--now]            # background maintenance: show status (--now forces a pass)");
+            eprintln!("  mem sync [--dry-run|--status] # ☁ two-way sync with the remote store (S3-compatible bucket)");
             eprintln!("  mem scope");
             std::process::exit(2);
         }
@@ -171,6 +197,10 @@ fn cmd_remember(args: &[String]) {
     // Lazy background work: writes are the intent signal. Count this one; if the sleep-stage
     // threshold trips, kick a detached `mem __worker` (never blocks or breaks the foreground).
     worker::note_writes_and_kick(&dir, 1);
+    // ☁ Push-through: the new belief (+ any edges the Linker just drew) becomes visible to
+    // every other session now, not at some future sync. No-op when no remote is configured;
+    // failure is a one-line benign skip (offline-first).
+    remote::push_after_write(&dir);
 }
 
 fn cmd_recall(args: &[String]) {
@@ -195,6 +225,7 @@ fn cmd_recall(args: &[String]) {
 
     let dir = store_dir();
     worker::surface_last_run(&dir); // one-line "what the background did", at most once per run
+    remote::pull_if_stale(&dir); // ☁ see what other sessions wrote (throttled; benign skip)
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
         Ok(g) => g,
@@ -452,6 +483,7 @@ fn cmd_ask(args: &[String]) {
 
     let dir = store_dir();
     worker::surface_last_run(&dir); // one-line "what the background did", at most once per run
+    remote::pull_if_stale(&dir); // ☁ see what other sessions wrote (throttled; benign skip)
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
         Ok(g) => g,

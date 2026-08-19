@@ -74,3 +74,10 @@ sidecar FIRST; DuckDB+vss only past a few thousand beliefs when real HNSW starts
 Side-finding: the committed corpora have zero reified edge-beliefs (all edges inline), so
 `g.adjacency()` is empty on them — only live-store beliefs get reified edges via the
 Consolidator. Anything traversing corpus relations must synthesize from inline `edges:`.
+
+## Cloud addendum (2026-08-19)
+
+The REMOTE question got its own decision: an S3-compatible bucket as the shared L0 transport
+(`docs/design/remote-store.md`). It does not change this file's verdict — the bucket is the
+same flat files with a network path; local dirs become caches; a future DuckDB index would sit
+UNDER a synced local dir exactly as it would today.

@@ -44,7 +44,11 @@ L0 Belief Log      append-only Merkle DAG · provenance · justification  [SOURC
   (known-debt query + `blocked_on` auto-resurface), `onboard [--tier2]`, **`world [list|show|diff]`**
   (parallel realities from `worlds.json` in/beside the store — corpus format verbatim), **`relive
   <as-of-time>`** (bitemporal replay diffed vs now), **`ask --world <w>`** (world-relative reduction:
-  suppress→refixpoint + the world's assumption threaded into the prompt), `worker [--now]` (the lazy
+  suppress→refixpoint + the world's assumption threaded into the prompt), **`sync`** (☁ cloud store: two-way sync with an
+  S3-compatible bucket — `remote.rs`; SigV4 over curl, zero deps; append-only set-diff, so
+  concurrent sessions never conflict; `remember` pushes through, `recall`/`ask` pull-if-stale,
+  the worker pushes background edges; embeddings single-writer via `remote.role`; see
+  `docs/design/remote-store.md`), `worker [--now]` (the lazy
   background tier, `src/worker.rs`: writes trip a due-check that kicks a detached `mem __worker` —
   consolidate + weekly dream piggyback + daily V8 sweep piggyback; `recall`/`ask` surface a one-line summary; every pass is
   metered into `.worker-metrics.jsonl` — wall/chat/embed costs via `memory_embed::counters()`, BOTH
