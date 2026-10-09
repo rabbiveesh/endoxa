@@ -210,6 +210,24 @@ on something only a human can resolve, so the autonomous pass stops here. The fo
   `dream` piggyback); `recall`/`ask` surface a one-line summary; `mem worker [--now]` is the manual
   surface. The delivery mechanism for the existing NREM/REM linkers — see the doc's "As built"
   section for the open-question decisions (scope = triggering invocation's active scope, etc.).
+- **System-1 classifiers with legible labels (CLEF)** — parked 2026-10-09. Run classification
+  experiments with named labels in place of decisions made in vector space (cosine thresholds).
+  Candidate: [Cloudflare/clef](https://huggingface.co/Cloudflare/clef) (Apache-2.0; Qwen 27B
+  backbone + joint schema head; Clef-Flash is the smaller variant). Input is `state` + typed
+  `questions` (`noul` = bool, `choice` = named options, `score` = ordered options). It does no
+  free-text generation and returns a softmax over every option in one forward pass.
+  Cloudflare's own benchmarks put it strong on intent classification (BANKING77 94.2, CLINC150
+  97.4 macro-F1) and RAGTruth 79.4. Natural fits here:
+  - **Linker edge-kind typing** as a `choice` over `EdgeKind` (+ `none`), scored against the
+    N8/V7 gold edges, beside the LLM judge.
+  - **V8 sweep verification** as a `noul` ("does A supersede B?"), compared with double-verified
+    chat judging.
+  - **`depends_on` review triage** and contradiction/conflict detection (the N3 conflict pass).
+  - Per-option probabilities are a calibrated-ish number, so this could be the consumer N7 lacks.
+  Constraints: published run path is Python/torch on an H200, with vLLM/SGLang as alternatives
+  and no CPU/ollama path. It also doesn't fit `chat_json`: it would need its own `classify(state,
+  schema) → probs` seam in `memory-embed` behind an HTTP server. Try Clef-Flash first.
+  The harness template is `eval-qa.rs`.
 
 ## Housekeeping
 
