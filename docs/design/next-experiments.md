@@ -226,7 +226,11 @@ on something only a human can resolve, so the autonomous pass stops here. The fo
   - Per-option probabilities are a calibrated-ish number, so this could be the consumer N7 lacks.
   Constraints: published run path is Python/torch on an H200, with vLLM/SGLang as alternatives
   and no CPU/ollama path. It also doesn't fit `chat_json`: it would need its own `classify(state,
-  schema) → probs` seam in `memory-embed` behind an HTTP server. Try Clef-Flash first.
+  schema) → probs` seam in `memory-embed` behind an HTTP server. Try Clef-Flash first: it is 9B
+  params (Qwen3.5-9B backbone). With an 8 GB GPU, Clef is out (~15 GB even at 4-bit). Clef-Flash
+  is plausible only at 4-bit (~5–6 GB weights) via transformers + bitsandbytes, with a short
+  `max_length` (state is one belief pair). GGUF/ollama community quants likely drop the custom
+  schema head and leave a plain text generator, so they lose the per-option probabilities.
   The harness template is `eval-qa.rs`.
 
 ## Housekeeping
