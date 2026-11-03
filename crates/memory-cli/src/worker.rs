@@ -600,32 +600,17 @@ fn pid_alive(_pid: u32) -> bool {
 
 // --- the worker itself (`mem __worker`, hidden) -----------------------------------------
 
-/// Args of the hidden `mem __worker [--limit N] [--cli]`: an explicit limit + the cli marker
-/// mean "a detached deliberate `mem consolidate`" (caller's limit, no dream piggyback); bare
-/// means a due-check kick (backlog-derived limit, dream piggybacks).
-fn parse_worker_args(args: &[String]) -> (Option<usize>, bool) {
-    let mut limit = None;
-    let mut cli = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()); i += 1; }
-            "--cli" => cli = true,
-            _ => {}
-        }
-        i += 1;
-    }
-    (limit, cli)
-}
-
 /// The detached body: lock, snapshot the pending-write count, run the due passes, then update
 /// state. The claimed writes are DRAINED only when the pass actually consolidated something —
 /// a failed pass (backend down) or an empty-scope pass keeps the backlog pending so it retries /
 /// catches up later; `last_run` still advances, so the min-interval throttles those retries.
 /// Only a KILLED run leaves state fully untouched and re-triggers immediately. Every pass
 /// appends a line to the metrics ledger.
-pub fn run_worker(args: &[String]) {
-    let (limit_override, cli) = parse_worker_args(args);
+///
+/// Args of the hidden `mem __worker [--limit N] [--cli]`: an explicit limit + the cli marker mean
+/// "a detached deliberate `mem consolidate`" (caller's limit, no dream piggyback); bare means a
+/// due-check kick (backlog-derived limit, dream piggybacks).
+pub fn run_worker(limit_override: Option<usize>, cli: bool) {
     let trigger = if cli { "cli" } else { "worker" };
     let dir = crate::store_dir();
     let w = crate::load_settings().worker;
@@ -827,11 +812,11 @@ fn pass_limit(claimed: u64, max_targets: u64) -> usize {
 
 // --- the manual control surface (`mem worker [--now]`) ----------------------------------
 
-pub fn cmd_worker(args: &[String]) {
+pub fn cmd_worker(now: bool) {
     let dir = crate::store_dir();
     let w = crate::load_settings().worker;
 
-    if args.iter().any(|a| a == "--now") {
+    if now {
         if !worker_allowed(&w) {
             println!("worker is disabled (worker.enabled=false or MEM_NO_BG set) — not kicking.");
             return;
@@ -1165,15 +1150,6 @@ mod tests {
         assert_eq!(dur(750), "750ms");
         assert_eq!(dur(45_210), "45.2s");
         assert_eq!(dur(154_000), "2m34s");
-    }
-
-    #[test]
-    fn worker_args_parse_limit_and_cli_marker() {
-        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(parse_worker_args(&a(&[])), (None, false), "bare = due-check semantics");
-        assert_eq!(parse_worker_args(&a(&["--limit", "30", "--cli"])), (Some(30), true));
-        assert_eq!(parse_worker_args(&a(&["--cli"])), (None, true));
-        assert_eq!(parse_worker_args(&a(&["--limit", "x"])), (None, false), "bad number → default");
     }
 
     #[test]

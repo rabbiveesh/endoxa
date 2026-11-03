@@ -47,6 +47,9 @@ mem promote [<branch>]                # lift merged-branch beliefs into repo can
 mem scope
 ```
 
+Every command answers `--help`, and unknown flags are errors. To store a claim that starts
+with a hyphen, use `mem remember -- "--foo is a flag"`.
+
 Build with `cargo build --release` (the binary is `mem`). The store lives in
 `$MEMORY_DIR` (default `~/.local/share/agentic-memory/beliefs`). Embeddings and the
 judge use Ollama if present; without it, recall degrades gracefully to lexical match.
