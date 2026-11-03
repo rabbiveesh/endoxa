@@ -3,11 +3,11 @@
 //! Runs in the repo per-invocation, so it sees LOCAL (unpushed) git state and derives the
 //! active scope from it. Degrades gracefully outside a git repo (→ global scope only).
 //!
-//!   mem remember "<claim>" [--supersedes <slug|id>] [--global] [--ref R]... [--body B]
-//!   mem recall   "<query>" [--limit N]
-//!   mem scope                         # show the active scopes here
+//! Run `mem --help` or `mem <command> --help`; the grammar lives in `cli.rs`.
 //!
 //! Store: $MEMORY_DIR (default ~/.local/share/agentic-memory/beliefs).
+
+mod cli;
 
 use memory_consolidate::{novelty_pair_key, Consolidator, NoveltyDreamer, Orchestrator, ProbeRecord, Reducer, SweepVerdict, Sweeper};
 use memory_core::{
@@ -79,72 +79,38 @@ fn load_settings() -> Settings {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(|s| s.as_str()) {
-        Some("remember") => cmd_remember(&args[1..]),
-        Some("recall") => cmd_recall(&args[1..]),
-        Some("expand") => cmd_expand(&args[1..]),
-        Some("ask") => cmd_ask(&args[1..]),
-        Some("forget") => cmd_forget(&args[1..]),
-        Some("promote") => cmd_promote(&args[1..]),
-        Some("consolidate") => cmd_consolidate(&args[1..]),
-        Some("sweep") => cmd_sweep(&args[1..]),
-        Some("reduce") => cmd_reduce(&args[1..]),
-        Some("dream") => cmd_dream(&args[1..]),
-        Some("review") => cmd_review(&args[1..]),
-        Some("link") => cmd_link(&args[1..]),
-        Some("debt") => cmd_debt(&args[1..]),
-        Some("onboard") => cmd_onboard(&args[1..]),
-        Some("world") => cmd_world(&args[1..]),
-        Some("relive") => cmd_relive(&args[1..]),
-        Some("worker") => worker::cmd_worker(&args[1..]),
-        Some("__worker") => worker::run_worker(&args[1..]),
-        Some("scope") => println!("active scopes: {}", active_scopes().join(", ")),
-        _ => {
-            eprintln!("usage:");
-            eprintln!("  mem remember \"<claim>\" [--supersedes <slug|id>] [--global] [--ref R] [--body B]");
-            eprintln!("  mem recall \"<query>\" [--limit N] [--no-bridges]");
-            eprintln!("  mem expand <slug|id>          # one-hop: show a belief's linked context");
-            eprintln!("  mem ask \"<question>\" [--limit N] [--world W]  # LLM-synthesized grounded answer (opt-in; world-relative with --world)");
-            eprintln!("  mem forget <slug|id> [--reason R]  # retract a belief: recall drops it (file kept)");
-            eprintln!("  mem promote [<branch>] [--dry-run]  # lift a merged branch's beliefs into repo canon");
-            eprintln!("  mem consolidate [--limit N] [--fg]  # run the LLM judge over recent beliefs (detached by default; --fg = inline)");
-            eprintln!("  mem sweep [--limit N] [--threshold T] [--dry-run]  # find + mark SILENT staleness across the whole frontier (double-verified supersedes)");
-            eprintln!("  mem reduce [--dry-run]        # collapse duplicate beliefs: recall folds them behind one rep");
-            eprintln!("  mem dream [--limit N]         # REM/novelty pass: bridge the most-unrelated pairs");
-            eprintln!("  mem review [--limit N]        # list edges flagged for frontier review (candidate depends_on)");
-            eprintln!("  mem link <subj> <kind> <obj> [--rationale R]  # author a durable edge (frontier/human adjudication)");
-            eprintln!("  mem debt [<query>]            # list known-debt (deficiency) beliefs; ⚠ resurfaces when a blocked_on constraint lifts");
-            eprintln!("  mem onboard [<repo>] [--out DIR] [--top N] [--escalate N] [--tier2] [--commit]  # lead harvest → claim drafts (+§3b debt envelope) → store");
-            eprintln!("  mem world [list|show <name>|diff <a> <b>]  # parallel realities: per-world frontiers from worlds.json");
-            eprintln!("  mem relive <as-of-time> [--all]  # bitemporal replay: the frontier as it stood then, diffed vs now");
-            eprintln!("  mem worker [--now]            # background maintenance: show status (--now forces a pass)");
-            eprintln!("  mem scope");
-            std::process::exit(2);
+    use cli::{Cli, Cmd};
+    use clap::Parser;
+    match Cli::parse().command {
+        Cmd::Remember { claim, supersedes, global, refs, body } => {
+            cmd_remember(claim.join(" "), supersedes, global, refs, body)
         }
+        Cmd::Recall { query, limit, no_bridges } => cmd_recall(query.join(" "), limit, no_bridges),
+        Cmd::Expand { reference } => cmd_expand(reference),
+        Cmd::Ask { question, limit, world } => cmd_ask(question.join(" "), limit, world),
+        Cmd::Forget { reference, reason } => cmd_forget(reference, reason),
+        Cmd::Promote { branch, dry_run } => cmd_promote(branch, dry_run),
+        Cmd::Consolidate { limit, fg } => cmd_consolidate(limit, fg),
+        Cmd::Sweep { limit, threshold, dry_run } => cmd_sweep(limit, threshold, dry_run),
+        Cmd::Reduce { dry_run } => cmd_reduce(dry_run),
+        Cmd::Dream { limit } => cmd_dream(limit),
+        Cmd::Review { limit } => cmd_review(limit),
+        Cmd::Link { subject, kind, object, rationale } => cmd_link(subject, kind, object, rationale),
+        Cmd::Debt { query } => cmd_debt(query.join(" ")),
+        Cmd::Onboard { repo, out, top, escalate, tier2, commit } => {
+            cmd_onboard(repo, out, top, escalate, tier2, commit)
+        }
+        Cmd::World { action } => cmd_world(action),
+        Cmd::Relive { time, all } => cmd_relive(time, all),
+        Cmd::Worker { now } => worker::cmd_worker(now),
+        Cmd::InternalWorker { limit, cli } => worker::run_worker(limit, cli),
+        Cmd::Scope => println!("active scopes: {}", active_scopes().join(", ")),
     }
 }
 
 // --- commands --------------------------------------------------------------------------
 
-fn cmd_remember(args: &[String]) {
-    let mut claim = String::new();
-    let mut refs: Vec<String> = Vec::new();
-    let mut body = String::new();
-    let mut supersedes: Option<String> = None;
-    let mut global = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--global" => global = true,
-            "--supersedes" => { supersedes = args.get(i + 1).cloned(); i += 1; }
-            "--ref" => { if let Some(r) = args.get(i + 1) { refs.push(r.clone()); } i += 1; }
-            "--body" => { body = args.get(i + 1).cloned().unwrap_or_default(); i += 1; }
-            s if claim.is_empty() => claim = s.to_string(),
-            _ => {}
-        }
-        i += 1;
-    }
+fn cmd_remember(claim: String, supersedes: Option<String>, global: bool, refs: Vec<String>, body: String) {
     if claim.trim().is_empty() {
         eprintln!("remember needs a claim");
         std::process::exit(2);
@@ -173,20 +139,7 @@ fn cmd_remember(args: &[String]) {
     worker::note_writes_and_kick(&dir, 1);
 }
 
-fn cmd_recall(args: &[String]) {
-    let mut query = String::new();
-    let mut limit = 10usize;
-    let mut no_bridges = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(10); i += 1; }
-            "--no-bridges" => no_bridges = true,
-            s if query.is_empty() => query = s.to_string(),
-            s => { query.push(' '); query.push_str(s); }
-        }
-        i += 1;
-    }
+fn cmd_recall(query: String, limit: usize, no_bridges: bool) {
     let query = query.trim().to_string();
     if query.is_empty() {
         eprintln!("recall needs a query");
@@ -367,11 +320,8 @@ fn cmd_recall(args: &[String]) {
 /// `mem expand <slug|id>` — one hop. Shows a belief and its CURRENT linked neighbors, grouped by
 /// relation kind + direction. Deterministic (no LLM); the robot drives the graph-walk explicitly,
 /// so the whole exploration stays a replayable command trail (human-reproducible).
-fn cmd_expand(args: &[String]) {
-    let Some(reference) = args.first() else {
-        eprintln!("expand needs a <slug|id>");
-        std::process::exit(2);
-    };
+fn cmd_expand(reference: String) {
+    let reference = &reference;
     let dir = store_dir();
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
@@ -430,20 +380,7 @@ missing in `gaps`. Be concise. Reply JSON: \
 /// top-k beliefs and has qwen synthesize a grounded answer (cited, conflict-honest, gap-explicit).
 /// The ONE place an LLM sits on the read path; `recall` stays deterministic. Degrades to raw
 /// beliefs if Ollama is down — the robot can read them itself.
-fn cmd_ask(args: &[String]) {
-    let mut question = String::new();
-    let mut limit = 8usize;
-    let mut world_name: Option<String> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(8); i += 1; }
-            "--world" => { world_name = args.get(i + 1).cloned(); i += 1; }
-            s if question.is_empty() => question = s.to_string(),
-            s => { question.push(' '); question.push_str(s); }
-        }
-        i += 1;
-    }
+fn cmd_ask(question: String, limit: usize, world_name: Option<String>) {
     let question = question.trim().to_string();
     if question.is_empty() {
         eprintln!("ask needs a question");
@@ -615,7 +552,7 @@ fn live_conflicts_among_hits(g: &Graph, defeated: &std::collections::HashSet<Str
 /// named assumption + a suppress set (in `worlds.json`, beside or inside the store — the corpus
 /// format, verbatim); resolving it re-runs the frontier fixpoint without the suppressed defeats,
 /// so the SAME immutable beliefs yield a different current-set. Deterministic, no LLM.
-fn cmd_world(args: &[String]) {
+fn cmd_world(action: Option<cli::WorldCmd>) {
     let dir = store_dir();
     let g = match Graph::load_dir(&dir) {
         Ok(g) if !g.is_empty() => g,
@@ -632,8 +569,8 @@ fn cmd_world(args: &[String]) {
     let default = wf.default_world().cloned().unwrap_or_default();
     let d_default = sg.defeated_in(&default);
 
-    match args.first().map(|s| s.as_str()) {
-        None | Some("list") => {
+    match action {
+        None | Some(cli::WorldCmd::List) => {
             println!("worlds ({}):", wf.path.display());
             let total = sg.content().count();
             for w in &wf.worlds {
@@ -659,9 +596,8 @@ fn cmd_world(args: &[String]) {
             }
             println!("\nnext: mem world show <name> · mem world diff <a> <b> · mem ask \"<q>\" --world <name>");
         }
-        Some("show") => {
-            let Some(name) = args.get(1) else { eprintln!("usage: mem world show <name>"); std::process::exit(2); };
-            let Some(w) = wf.get(name) else {
+        Some(cli::WorldCmd::Show { name }) => {
+            let Some(w) = wf.get(&name) else {
                 eprintln!("no world '{name}' — have: {}", wf.worlds.iter().map(|w| w.name.as_str()).collect::<Vec<_>>().join(", "));
                 std::process::exit(2);
             };
@@ -687,12 +623,8 @@ fn cmd_world(args: &[String]) {
             }
             println!("\nnext: mem ask \"<q>\" --world {}   (reduce under this assumption)", w.name);
         }
-        Some("diff") => {
-            let (Some(an), Some(bn)) = (args.get(1), args.get(2)) else {
-                eprintln!("usage: mem world diff <a> <b>");
-                std::process::exit(2);
-            };
-            let (Some(wa), Some(wb)) = (wf.get(an), wf.get(bn)) else {
+        Some(cli::WorldCmd::Diff { a: an, b: bn }) => {
+            let (Some(wa), Some(wb)) = (wf.get(&an), wf.get(&bn)) else {
                 eprintln!("unknown world — have: {}", wf.worlds.iter().map(|w| w.name.as_str()).collect::<Vec<_>>().join(", "));
                 std::process::exit(2);
             };
@@ -708,10 +640,6 @@ fn cmd_world(args: &[String]) {
                 println!("  [{}] {an}={} {bn}={} — {}", b.slug, f(*la), f(*lb), truncate(&b.claim, 70));
             }
         }
-        Some(other) => {
-            eprintln!("unknown subcommand '{other}' — usage: mem world [list|show <name>|diff <a> <b>]");
-            std::process::exit(2);
-        }
     }
 }
 
@@ -719,20 +647,7 @@ fn cmd_world(args: &[String]) {
 /// transaction time (later beliefs don't exist yet, so later defeats genuinely un-happen),
 /// resolve THAT frontier, and diff it against now. Answers "what did we believe then?" — the
 /// append-only store's reason for never deleting. A date alone means end-of-that-day.
-fn cmd_relive(args: &[String]) {
-    let mut t = String::new();
-    let mut show_all = false;
-    for a in args {
-        match a.as_str() {
-            "--all" => show_all = true,
-            s if t.is_empty() => t = s.to_string(),
-            _ => {}
-        }
-    }
-    if t.is_empty() {
-        eprintln!("usage: mem relive <as-of-time> [--all]   e.g. mem relive 2026-03-01");
-        std::process::exit(2);
-    }
+fn cmd_relive(mut t: String, show_all: bool) {
     if t.len() == 10 {
         t.push_str("T23:59:59.999Z"); // a bare date means "as of end of that day"
     }
@@ -829,18 +744,7 @@ fn is_regenerable_edge(author_id: &str) -> bool {
 /// current set — recall/ask no longer surface it — while the belief stays on disk for reliving,
 /// and the retraction is itself defeasible (a later supersedes-of-the-retraction reinstates it).
 /// Written in the target's OWN scope, so a branch-local forget stays branch-local.
-fn cmd_forget(args: &[String]) {
-    let mut reference = String::new();
-    let mut reason = String::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--reason" => { reason = args.get(i + 1).cloned().unwrap_or_default(); i += 1; }
-            s if reference.is_empty() => reference = s.to_string(),
-            _ => {}
-        }
-        i += 1;
-    }
+fn cmd_forget(reference: String, reason: String) {
     if reference.trim().is_empty() {
         eprintln!("forget needs a <slug|id>");
         std::process::exit(2);
@@ -915,18 +819,7 @@ fn cmd_forget(args: &[String]) {
 ///    and frontier resolution + a later `mem consolidate`/adjudication settle any clash.
 ///  - The duplicate claim (branch original + canon copy) is expected to be collapsed by the
 ///    reduction/caching layer; on `main` only the canon copy is in scope anyway.
-fn cmd_promote(args: &[String]) {
-    let mut branch_arg: Option<String> = None;
-    let mut dry_run = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--dry-run" => dry_run = true,
-            s if branch_arg.is_none() && !s.starts_with("--") => branch_arg = Some(s.to_string()),
-            _ => {}
-        }
-        i += 1;
-    }
+fn cmd_promote(branch_arg: Option<String>, dry_run: bool) {
 
     let Some(id) = repo_id() else {
         eprintln!("not in a git repo — nothing to promote");
@@ -1180,18 +1073,7 @@ fn consolidate(dir: &PathBuf, new_id: &str, scope: &str, hints: &[Hint]) -> usiz
 /// default (minutes of LLM work on CPU shouldn't hold the terminal): the pass runs as the same
 /// locked/instrumented background job as the worker tier, and the result surfaces on the next
 /// `recall`/`ask`. `--fg` (or a disabled background tier) keeps the synchronous inline path.
-fn cmd_consolidate(args: &[String]) {
-    let mut limit = 12usize;
-    let mut fg = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(12); i += 1; }
-            "--fg" => fg = true,
-            _ => {}
-        }
-        i += 1;
-    }
+fn cmd_consolidate(limit: usize, fg: bool) {
     let dir = store_dir();
     let scopes = active_scopes();
 
@@ -1334,21 +1216,7 @@ fn consolidate_pass(dir: &PathBuf, scopes: &[String], limit: usize) -> Result<(u
 /// already-confirmed pairs without re-paying for judgment.
 /// Judge model: `SWEEP_MODEL` > `JUDGE_MODEL` > `claude:sonnet` (V8: qwen-class judges are why
 /// V7's from-scratch linker failed; sweeping wants the strongest judge available).
-fn cmd_sweep(args: &[String]) {
-    let mut limit = 25usize;
-    let mut threshold = SWEEP_DEFAULT_THRESHOLD;
-    let mut dry = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--limit" => { limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(25); i += 1; }
-            "--threshold" => { threshold = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(0.80); i += 1; }
-            "--dry-run" => dry = true,
-            _ => {}
-        }
-        i += 1;
-    }
-
+fn cmd_sweep(limit: usize, threshold: f32, dry: bool) {
     if let Err(e) = sweep_pass(&store_dir(), limit, threshold, dry, true) {
         println!("{e}"); // benign infos (empty store, tiny scope) — stdout, like every sibling command
     }
@@ -1588,13 +1456,7 @@ belief says has changed). Reply JSON: {\"verdict\":\"KEEP\"|\"MISLEADING\",\"why
 /// the Linker's existing edges (re-gated on embedding similarity) rather than re-clustering; each
 /// fold is committed in the MEMBER's own scope (like forget/promote) so a branch-local duplicate
 /// stays branch-local.
-fn cmd_reduce(args: &[String]) {
-    let mut dry_run = false;
-    for a in args {
-        if a == "--dry-run" {
-            dry_run = true;
-        }
-    }
+fn cmd_reduce(dry_run: bool) {
     let dir = store_dir();
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
@@ -1669,16 +1531,7 @@ fn cmd_reduce(args: &[String]) {
 /// `mem consolidate`). Probes the most-unrelated pairs for non-obvious bridges, caches every
 /// probe — including non-results — in a JSONL ledger so budget isn't re-burned, commits the rare
 /// bridges as non-defeating `analogous` edges, and reports the BRIDGE RATE.
-fn cmd_dream(args: &[String]) {
-    let mut limit = 8usize;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--limit" {
-            limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(8);
-            i += 1;
-        }
-        i += 1;
-    }
+fn cmd_dream(limit: usize) {
     let dir = store_dir();
     let scopes = active_scopes();
     // Metered like every other pass; a deliberate dream also resets the worker's weekly cadence.
@@ -1838,16 +1691,7 @@ fn depends_on_candidates(g: &Graph, defeated: &std::collections::HashSet<String>
 /// corroboration (measured). So this lists the candidate justifications and hands them to the
 /// consumer of the tool — a Claude Code session is the MAXIMUM judge, adjudicating on demand and
 /// authoring a durable edge with `mem link`. Pure derived view; nothing is written.
-fn cmd_review(args: &[String]) {
-    let mut limit = 20usize;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--limit" {
-            limit = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(20);
-            i += 1;
-        }
-        i += 1;
-    }
+fn cmd_review(limit: usize) {
     let dir = store_dir();
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
@@ -1908,24 +1752,7 @@ fn cmd_review(args: &[String]) {
 /// authored as `frontier@1` so it is NOT a regenerable machine edge — an unattended re-link links
 /// AROUND it and never overwrites it (human/frontier edges are anchors, §edge-assignment). The
 /// primary use is closing a `mem review` candidate into a real `depends_on`.
-fn cmd_link(args: &[String]) {
-    let mut rationale = String::new();
-    let mut positionals: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--rationale" => { rationale = args.get(i + 1).cloned().unwrap_or_default(); i += 1; }
-            s if !s.starts_with("--") => positionals.push(s.to_string()),
-            _ => {}
-        }
-        i += 1;
-    }
-    if positionals.len() < 3 {
-        eprintln!("usage: mem link <subject> <kind> <object> [--rationale R]   (kind e.g. depends_on)");
-        std::process::exit(2);
-    }
-    let (subject_ref, kind_str, object_ref) =
-        (positionals[0].clone(), positionals[1].clone(), positionals[2].clone());
+fn cmd_link(subject_ref: String, kind_str: String, object_ref: String, rationale: String) {
 
     let kind = EdgeKind::parse(&kind_str);
     // self-provenance never reifies; a hand-authored derived_from makes no sense here.
@@ -1994,9 +1821,7 @@ fn cmd_link(args: &[String]) {
 /// highest severity first; an optional <query> filters semantically. RESURFACE (N5): a debt whose
 /// `blocked_on` edge points at a now-DEFEATED belief — its forcing constraint was lifted/retracted —
 /// is flagged ⚠, the structural trigger to rework it. Deterministic; no LLM.
-fn cmd_debt(args: &[String]) {
-    let query: String =
-        args.iter().filter(|a| !a.starts_with("--")).cloned().collect::<Vec<_>>().join(" ");
+fn cmd_debt(query: String) {
     let dir = store_dir();
     let scopes = active_scopes();
     let g = match Graph::load_dir(&dir) {
@@ -2066,35 +1891,7 @@ fn cmd_debt(args: &[String]) {
 /// Tier-0 onboarding: deterministic git-history harvest → lead files for the eyeball pass.
 /// Writes OUTSIDE any repo by default (the data dir), so private-repo leads can't end up
 /// committed by accident. Leads are candidates, not beliefs — nothing touches the store.
-fn cmd_onboard(args: &[String]) {
-    let mut repo = PathBuf::from(".");
-    let mut out: Option<PathBuf> = None;
-    let mut top = 25usize;
-    let mut escalate = 0usize;
-    let mut commit = false;
-    let mut tier2 = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--out" => {
-                out = args.get(i + 1).map(PathBuf::from);
-                i += 1;
-            }
-            "--top" => {
-                top = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(25);
-                i += 1;
-            }
-            "--escalate" => {
-                escalate = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(30);
-                i += 1;
-            }
-            "--tier2" => tier2 = true,
-            "--commit" => commit = true,
-            a if !a.starts_with("--") => repo = PathBuf::from(a),
-            _ => {}
-        }
-        i += 1;
-    }
+fn cmd_onboard(repo: PathBuf, out: Option<PathBuf>, top: usize, escalate: usize, tier2: bool, commit: bool) {
     let now_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
